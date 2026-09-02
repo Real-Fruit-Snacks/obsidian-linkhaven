@@ -2,6 +2,7 @@ import { Debouncer, ItemView, Platform, WorkspaceLeaf, debounce, setIcon } from 
 import type LinkhavenPlugin from '../main';
 import { BookmarkRecord, VIEW_TYPE_GRID } from '../types';
 import { AddBookmarkModal, ConfirmModal, MoveToModal, iconButton } from '../modals';
+import { deleteBookmarkCascade } from '../ops';
 import { domainFromUrl } from '../utils';
 
 const CHUNK_SIZE = 60;
@@ -358,10 +359,39 @@ export class BookmarkGridView extends ItemView {
 				break;
 			case 'trash': {
 				const record = this.plugin.store.all().find((r) => r.path === path);
-				const name = record?.title || file.basename;
-				new ConfirmModal(this.app, `Move "${name}" to the trash?`, () => {
-					void this.app.fileManager.trashFile(file);
-				}).open();
+				// Name only the artifacts that actually exist in the vault.
+				const artifacts: string[] = [];
+				if (record?.cover && this.app.vault.getFileByPath(record.cover))
+					artifacts.push('cover');
+				// A favicon shared with other bookmarks (per-domain cache) is
+				// kept, so it is not listed among the removed artifacts.
+				if (
+					record?.favicon &&
+					this.app.vault.getFileByPath(record.favicon) &&
+					!this.plugin.store.all().some((r) => r.path !== path && r.favicon === record.favicon)
+				)
+					artifacts.push('favicon');
+				if (record?.readable && this.app.vault.getFileByPath(record.readable))
+					artifacts.push('archive copy');
+				let message = 'Delete this bookmark?';
+				if (artifacts.length > 0) {
+					const last = artifacts[artifacts.length - 1] ?? '';
+					const list =
+						artifacts.length === 1
+							? last
+							: artifacts.length === 2
+								? `${artifacts[0] ?? ''} and ${last}`
+								: `${artifacts.slice(0, -1).join(', ')}, and ${last}`;
+					message = `Delete this bookmark? Its ${list} will also be removed.`;
+				}
+				new ConfirmModal(
+					this.app,
+					message,
+					() => {
+						void deleteBookmarkCascade(this.app, this.plugin.settings, file, this.plugin.store);
+					},
+					{ destructive: true }
+				).open();
 				break;
 			}
 		}

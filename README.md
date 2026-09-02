@@ -27,11 +27,16 @@ or Node APIs, so nothing is "desktop only".
   actions (open, read/unread, pin, move to collection, trash).
 - **Automatic enrichment** — saves are zero-prompt; title, description, cover and
   favicon are fetched in the background at a polite rate, with retry on failure.
+  Notes saved with a domain file name are **renamed to the page title** once it
+  is known, and favicons are **shared per domain** instead of duplicated per
+  bookmark.
 - **Optional readable-text archive** per bookmark (Readability + Turndown, pure JS).
 - **Manage collections and tags** (rename, delete, merge-safe moves) from the tree.
 - **Drag cards onto collections** to file them (desktop).
 - **Linkwarden import** — collections, tags, dates and pinned links map across; existing
   URLs are skipped.
+- **Cascade delete** — deleting a bookmark also removes its cover, favicon, and archive
+  copy (only files inside the plugin's covers/archive folders are touched).
 - **Local-first** — plain Markdown files, no account, no telemetry.
 
 ## Install
@@ -96,6 +101,30 @@ Filing is separate from saving. Notes without a `collection` key land in the **I
 smart view; move them later with the card's **Move to collection** button (or by editing
 frontmatter).
 
+Re-saving an already-saved URL (add modal or `obsidian://bookmark-add`) opens a dialog
+that offers to **refetch the page** (overwrite title/description and re-download cover,
+favicon, and readable copy) or open the existing bookmark.
+
+### Sane names and shared favicons
+
+Notes saved before anything is known about the page get a domain file name
+(`github.com.md`, `github.com-2.md`, …). After enrichment fetches the real page title,
+Linkhaven renames the note to that title — along with its cover and readable copy, so
+names stay in correspondence. Only auto-named notes are renamed: notes that already have
+a real title (e.g. from the Web Clipper) are never touched. Turn this off with the
+**Rename notes to page title** setting.
+
+Favicons are cached once per domain under `Bookmarks/covers/favicons/` and reused by
+every bookmark of that domain (covers stay per-bookmark, since `og:image` differs per
+page). When a bookmark is deleted, a favicon still used by other bookmarks is kept.
+
+### Deleting bookmarks
+
+Trashing a bookmark from the grid card also moves its cached cover, favicon, and archive
+copy to the trash — but only when those files live inside the plugin's covers/archive
+folders. Deleting the note yourself in the file explorer does **not** cascade: the
+artifacts stay behind.
+
 ### Linkwarden import
 
 1. In Linkwarden, export your data as JSON and copy the file into your vault.
@@ -114,6 +143,7 @@ frontmatter).
 | Archive folder | `Bookmarks/archives` | Readable copies |
 | Capture readable copy | off | Save a readable Markdown copy during enrichment |
 | Show save chooser | off | Collection/tag pickers in the add modal |
+| Rename notes to page title | on | Rename domain-named notes to the fetched page title after enrichment |
 
 Tree collapse state and the last grid filter are persisted automatically.
 
@@ -128,7 +158,7 @@ status: unread                  # unread|read
 pinned: false
 created: 2026-01-01
 cover: Bookmarks/covers/example-cover.png
-favicon: Bookmarks/covers/example-favicon.png
+favicon: Bookmarks/covers/favicons/example.com.png   # shared per domain
 readable: Bookmarks/archives/example.md
 description: Optional summary
 ```

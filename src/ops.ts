@@ -1,4 +1,4 @@
-import { App, Notice } from 'obsidian';
+import { App, Notice, TFile, normalizePath } from 'obsidian';
 import type { LinkhavenSettings } from './settings';
 import type { BookmarkStore } from './store';
 import { sanitizeCollectionPart } from './utils';
@@ -13,6 +13,56 @@ function summaryNotice(prefix: string, result: OpResult, suffix: string): void {
 	let message = `${prefix} · ${result.updated} ${suffix}`;
 	if (result.failed > 0) message += `, ${result.failed} failed`;
 	new Notice(message);
+}
+
+/** True when `path` (normalized) lives strictly inside `folder` (normalized). */
+export function pathInsideFolder(path: string, folder: string): boolean {
+	const dir = normalizePath(folder);
+	if (!dir) return false;
+	return normalizePath(path).startsWith(`${dir}/`);
+}
+
+/**
+ * Trash `path` only when it lives inside the plugin-managed `folder`.
+ * Missing files and out-of-folder paths are skipped silently — the plugin
+ * never touches anything outside its own covers/archive folders.
+ */
+export async function trashManagedFile(app: App, path: string, folder: string): Promise<void> {
+	if (!path || !pathInsideFolder(path, folder)) return;
+	const target = app.vault.getFileByPath(normalizePath(path));
+	if (!target) return;
+	await app.fileManager.trashFile(target);
+}
+
+/**
+ * Delete a bookmark note together with the artifacts the plugin created for
+ * it: cached cover and favicon (coversFolder) and the readable archive copy
+ * (archiveFolder). Referenced files outside those folders are never touched,
+ * and a favicon shared with other bookmarks (same path, per-domain cache) is
+ * kept. Uses app.fileManager.trashFile throughout, so the user's
+ * system-/plugin-trash preference is respected.
+ */
+export async function deleteBookmarkCascade(
+	app: App,
+	s: LinkhavenSettings,
+	file: TFile,
+	store?: BookmarkStore
+): Promise<void> {
+	const fm = app.metadataCache.getFileCache(file)?.frontmatter;
+	const cover = typeof fm?.['cover'] === 'string' ? fm['cover'] : '';
+	const favicon = typeof fm?.['favicon'] === 'string' ? fm['favicon'] : '';
+	const readable = typeof fm?.['readable'] === 'string' ? fm['readable'] : '';
+	if (cover) await trashManagedFile(app, cover, s.coversFolder);
+	// Favicons are shared per domain: keep the file while any other bookmark
+	// still references the same path. Covers/readable copies are per-bookmark
+	// and are always trashed.
+	const faviconShared =
+		favicon.length > 0 &&
+		store !== undefined &&
+		store.all().some((r) => r.path !== file.path && r.favicon === favicon);
+	if (favicon && !faviconShared) await trashManagedFile(app, favicon, s.coversFolder);
+	if (readable) await trashManagedFile(app, readable, s.archiveFolder);
+	await app.fileManager.trashFile(file);
 }
 
 /**

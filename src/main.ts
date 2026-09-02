@@ -1,6 +1,6 @@
 import { Notice, Plugin, TFile, normalizePath } from 'obsidian';
 import { EnrichQueue, createBookmarkNote } from './enrich';
-import { AddBookmarkModal, ImportModal } from './modals';
+import { AddBookmarkModal, DuplicateModal, ImportModal } from './modals';
 import { LinkhavenSettings, LinkhavenSettingTab, DEFAULT_SETTINGS } from './settings';
 import { BookmarkStore } from './store';
 import { Filter, VIEW_TYPE_GRID, VIEW_TYPE_TREE } from './types';
@@ -140,14 +140,18 @@ export default class LinkhavenPlugin extends Plugin {
 				.filter((part) => part.length > 0)
 				.map((part) => sanitizeCollectionPart(part))
 				.join('/');
-			const known = this.store.byUrl(url);
-			const { file } = await createBookmarkNote(this.app, this.settings, {
+			const { file, created } = await createBookmarkNote(this.app, this.settings, {
 				url,
 				collection: collection || undefined,
 				tags: tags && tags.length > 0 ? tags : undefined,
 			});
-			this.enrichQueue.enqueue(file);
-			if (!known) new Notice(collection ? `Saved to ${collection}` : 'Saved to Inbox');
+			if (created) {
+				this.enrichQueue.enqueue(file);
+				new Notice(collection ? `Saved to ${collection}` : 'Saved to Inbox');
+			} else {
+				// Interactive duplicate: offer refetch / open instead of a bare notice.
+				new DuplicateModal(this.app, this, file).open();
+			}
 		} finally {
 			this.protocolInFlight.delete(url);
 		}

@@ -11,6 +11,7 @@ export interface LinkhavenSettings {
 	archiveFolder: string;
 	captureReadable: boolean;
 	showSaveChooser: boolean;
+	renameNotesToTitle: boolean;
 	collapsedNodes: string[];
 	lastFilter: Filter | null;
 	knownCollections: string[];
@@ -22,6 +23,7 @@ export const DEFAULT_SETTINGS: LinkhavenSettings = {
 	archiveFolder: 'Bookmarks/archives',
 	captureReadable: false,
 	showSaveChooser: false,
+	renameNotesToTitle: true,
 	collapsedNodes: [],
 	lastFilter: null,
 	knownCollections: [],
@@ -87,6 +89,15 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 					defaultValue: DEFAULT_SETTINGS.showSaveChooser,
 				},
 			},
+			{
+				name: 'Rename notes to page title',
+				desc: 'Rename auto-named bookmark notes (domain-based file names) to the fetched page title after enrichment.',
+				control: {
+					type: 'toggle',
+					key: 'renameNotesToTitle',
+					defaultValue: DEFAULT_SETTINGS.renameNotesToTitle,
+				},
+			},
 		];
 	}
 
@@ -114,6 +125,10 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 				return;
 			case 'showSaveChooser':
 				s.showSaveChooser = value === true;
+				await this.plugin.saveSettings();
+				return;
+			case 'renameNotesToTitle':
+				s.renameNotesToTitle = value === true;
 				await this.plugin.saveSettings();
 				return;
 		}
@@ -174,6 +189,17 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.showSaveChooser).onChange(async (value) => {
 					await this.setControlValue('showSaveChooser', value);
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Rename notes to page title')
+			.setDesc(
+				'Rename auto-named bookmark notes (domain-based file names) to the fetched page title after enrichment.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.renameNotesToTitle).onChange(async (value) => {
+					await this.setControlValue('renameNotesToTitle', value);
 				})
 			);
 	}

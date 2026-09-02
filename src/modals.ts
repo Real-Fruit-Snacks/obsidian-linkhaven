@@ -210,6 +210,61 @@ export class TextInputModal extends Modal {
 	}
 }
 
+/**
+ * Shown when an interactive add (modal submit or obsidian:// URI) hits an
+ * already-saved URL. Enter triggers the primary action ("Refetch page").
+ */
+export class DuplicateModal extends Modal {
+	private plugin: LinkhavenPlugin;
+	private file: TFile;
+	private helper = new Component();
+
+	constructor(app: App, plugin: LinkhavenPlugin, file: TFile) {
+		super(app);
+		this.plugin = plugin;
+		this.file = file;
+	}
+
+	onOpen(): void {
+		this.helper.load();
+		const { contentEl } = this;
+		contentEl.addClass('lh-modal');
+		contentEl.createEl('h2', { text: 'Already saved' });
+		const fm = this.app.metadataCache.getFileCache(this.file)?.frontmatter;
+		const title = typeof fm?.['title'] === 'string' ? fm['title'].trim() : '';
+		const url = typeof fm?.['url'] === 'string' ? fm['url'] : '';
+		contentEl.createEl('p', {
+			text: `This link is already saved: ${title || url || this.file.basename}`,
+		});
+
+		const buttons = contentEl.createDiv({ cls: 'lh-modal-buttons' });
+		const cancel = buttons.createEl('button', { text: 'Cancel' });
+		const open = buttons.createEl('button', { text: 'Open bookmark' });
+		const refetch = buttons.createEl('button', { text: 'Refetch page', cls: 'mod-cta' });
+		this.helper.registerDomEvent(cancel, 'click', () => this.close());
+		this.helper.registerDomEvent(open, 'click', () => {
+			this.close();
+			void this.app.workspace.getLeaf('tab').openFile(this.file);
+		});
+		const doRefetch = (): void => {
+			this.close();
+			void this.plugin.enrichQueue.refetch(this.file);
+		};
+		this.helper.registerDomEvent(refetch, 'click', doRefetch);
+		this.helper.registerDomEvent(contentEl, 'keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				doRefetch();
+			}
+		});
+	}
+
+	onClose(): void {
+		this.helper.unload();
+		this.contentEl.empty();
+	}
+}
+
 export interface AddBookmarkPreset {
 	url?: string;
 	collection?: string;
@@ -337,18 +392,20 @@ export class AddBookmarkModal extends Modal {
 				.split(',')
 				.map((t) => t.trim())
 				.filter((t) => t.length > 0);
-			const known = this.plugin.store.byUrl(url);
-			const { file } = await createBookmarkNote(this.app, this.plugin.settings, {
+			const { file, created } = await createBookmarkNote(this.app, this.plugin.settings, {
 				url,
 				title: this.title.trim() || undefined,
 				collection: this.collection || undefined,
 				tags: tags.length > 0 ? tags : undefined,
 			});
-			this.plugin.enrichQueue.enqueue(file);
-			if (!known) {
-				new Notice(this.collection ? `Saved to ${this.collection}` : 'Saved to Inbox');
-			}
 			this.close();
+			if (created) {
+				this.plugin.enrichQueue.enqueue(file);
+				new Notice(this.collection ? `Saved to ${this.collection}` : 'Saved to Inbox');
+			} else {
+				// Interactive duplicate: offer refetch / open instead of a bare notice.
+				new DuplicateModal(this.app, this.plugin, file).open();
+			}
 		} finally {
 			this.submitting = false;
 			if (this.saveButton) this.saveButton.disabled = false;
