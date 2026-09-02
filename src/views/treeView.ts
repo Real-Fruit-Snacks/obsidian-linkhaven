@@ -1,6 +1,6 @@
 import { Debouncer, ItemView, Menu, Notice, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
 import type LinkhavenPlugin from '../main';
-import { ConfirmModal, TextInputModal, iconButton } from '../modals';
+import { ConfirmModal, IconPickerModal, TextInputModal, iconButton } from '../modals';
 import {
 	addCollection,
 	addTagToBookmark,
@@ -350,6 +350,11 @@ export class CollectionTreeView extends ItemView {
 		} else {
 			row.createSpan({ cls: 'lh-tree-arrow lh-tree-arrow-empty' });
 		}
+		// Assigned collection icon (settings.collectionIcons) replaces the
+		// default folder icon.
+		const iconEl = row.createSpan({ cls: 'lh-tree-icon' });
+		iconEl.setAttribute('aria-hidden', 'true');
+		setIcon(iconEl, this.plugin.settings.collectionIcons[node.path] ?? 'folder');
 		row.createSpan({ cls: 'lh-tree-label', text: node.name });
 		row.createSpan({ cls: 'lh-tree-count', text: String(node.count) });
 
@@ -378,13 +383,29 @@ export class CollectionTreeView extends ItemView {
 	}
 
 	private collectionMenu(path: string): Menu {
-		return new Menu()
+		const menu = new Menu()
 			.addItem((item) =>
 				item
 					.setTitle('New subcollection')
 					.setIcon('folder-plus')
 					.onClick(() => this.promptNewCollection(path))
 			)
+			.addItem((item) =>
+				item
+					.setTitle('Change icon')
+					.setIcon('smile')
+					.onClick(() => this.promptCollectionIcon(path))
+			);
+		// "Remove icon" only appears while an icon is assigned.
+		if (this.plugin.settings.collectionIcons[path]) {
+			menu.addItem((item) =>
+				item
+					.setTitle('Remove icon')
+					.setIcon('folder')
+					.onClick(() => void this.setCollectionIcon(path, null))
+			);
+		}
+		return menu
 			.addItem((item) =>
 				item
 					.setTitle('Rename')
@@ -434,6 +455,25 @@ export class CollectionTreeView extends ItemView {
 			.filter((part) => part.length > 0);
 		const path = parent ? `${parent}/${parts.join('/')}` : parts.join('/');
 		await addCollection(this.plugin.settings, path);
+		await this.plugin.saveSettings();
+		this.renderLists();
+	}
+
+	private promptCollectionIcon(path: string): void {
+		new IconPickerModal(
+			this.app,
+			this.plugin.settings.collectionIcons[path] ?? null,
+			(icon) => void this.setCollectionIcon(path, icon)
+		).open();
+	}
+
+	/** Assign (or clear, when null) a collection's icon, persist, re-render. */
+	private async setCollectionIcon(path: string, icon: string | null): Promise<void> {
+		if (icon) {
+			this.plugin.settings.collectionIcons[path] = icon;
+		} else {
+			delete this.plugin.settings.collectionIcons[path];
+		}
 		await this.plugin.saveSettings();
 		this.renderLists();
 	}

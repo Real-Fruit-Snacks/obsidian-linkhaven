@@ -6,8 +6,10 @@ import {
 	Notice,
 	Setting,
 	TFile,
+	getIconIds,
 	normalizePath,
 	setIcon,
+	setTooltip,
 } from 'obsidian';
 import { createBookmarkNote } from './enrich';
 import { importLinkwarden } from './importer';
@@ -737,6 +739,103 @@ export class ImportModal extends Modal {
 			path
 		);
 		new Notice(`Imported ${created} bookmarks, skipped ${skipped}`);
+	}
+
+	onClose(): void {
+		this.helper.unload();
+		this.contentEl.empty();
+	}
+}
+
+/** Maximum number of icon cells rendered at once in IconPickerModal. */
+const ICON_PICKER_CAP = 144;
+
+/**
+ * Searchable Lucide icon picker for a collection. Lists every registered icon
+ * id (getIconIds(), sorted — lucide icons come 'lucide-'-prefixed and setIcon
+ * accepts the ids as-is), live-filters by case-insensitive substring, and
+ * renders at most ICON_PICKER_CAP cells. An empty query shows the first
+ * ICON_PICKER_CAP ids of the sorted list. onPick receives the chosen icon id,
+ * or null when "Use default" clears the assignment (folder icon).
+ */
+export class IconPickerModal extends Modal {
+	private current: string | null;
+	private onPick: (icon: string | null) => void;
+	private helper = new Component();
+	private gridEl!: HTMLElement;
+	private inputEl!: HTMLInputElement;
+
+	constructor(app: App, current: string | null, onPick: (icon: string | null) => void) {
+		super(app);
+		this.current = current;
+		this.onPick = onPick;
+	}
+
+	onOpen(): void {
+		this.helper.load();
+		const { contentEl } = this;
+		contentEl.addClass('lh-modal');
+		contentEl.createEl('h2', { text: 'Collection icon' });
+
+		this.inputEl = contentEl.createEl('input', {
+			cls: 'lh-icon-picker-search',
+			attr: { type: 'text', placeholder: 'Search icons' },
+		});
+		this.gridEl = contentEl.createDiv({ cls: 'lh-icon-picker-grid' });
+		this.renderGrid('');
+
+		this.helper.registerDomEvent(this.inputEl, 'input', () =>
+			this.renderGrid(this.inputEl.value)
+		);
+		// Enter picks the first visible icon.
+		this.helper.registerDomEvent(this.inputEl, 'keydown', (e: KeyboardEvent) => {
+			if (e.key !== 'Enter') return;
+			e.preventDefault();
+			const first = this.gridEl.querySelector<HTMLElement>('[data-lh-icon]');
+			const id = first?.dataset['lhIcon'];
+			if (id) {
+				this.close();
+				this.onPick(id);
+			}
+		});
+		this.helper.registerDomEvent(this.gridEl, 'click', (e: MouseEvent) => {
+			const cell = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-icon]');
+			const id = cell?.dataset['lhIcon'];
+			if (!id) return;
+			this.close();
+			this.onPick(id);
+		});
+
+		const buttons = contentEl.createDiv({ cls: 'lh-modal-buttons' });
+		const useDefault = buttons.createEl('button', { text: 'Use default' });
+		const cancel = buttons.createEl('button', { text: 'Cancel' });
+		this.helper.registerDomEvent(useDefault, 'click', () => {
+			this.close();
+			this.onPick(null);
+		});
+		this.helper.registerDomEvent(cancel, 'click', () => this.close());
+		this.inputEl.focus();
+	}
+
+	private renderGrid(query: string): void {
+		this.gridEl.empty();
+		const q = query.trim().toLowerCase();
+		const shown = getIconIds()
+			.sort((a, b) => a.localeCompare(b))
+			.filter((id) => !q || id.toLowerCase().includes(q))
+			.slice(0, ICON_PICKER_CAP);
+		if (shown.length === 0) {
+			this.gridEl.createDiv({ cls: 'lh-empty', text: 'No icons match' });
+			return;
+		}
+		for (const id of shown) {
+			const cell = this.gridEl.createEl('button', { cls: 'lh-icon-picker-cell' });
+			cell.dataset['lhIcon'] = id;
+			cell.setAttribute('aria-label', id);
+			setTooltip(cell, id);
+			if (id === this.current) cell.addClass('is-active');
+			setIcon(cell, id);
+		}
 	}
 
 	onClose(): void {

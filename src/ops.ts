@@ -99,6 +99,13 @@ export async function renameCollection(
 		.map((c) => (c === from || c.startsWith(`${from}/`) ? to + c.slice(from.length) : c))
 		.filter((c, i, all) => all.indexOf(c) === i)
 		.sort((a, b) => a.localeCompare(b));
+	// Re-key collectionIcons with the same prefix rule so icons survive renames.
+	const renamedIcons: Record<string, string> = {};
+	for (const [key, icon] of Object.entries(s.collectionIcons)) {
+		renamedIcons[key === from || key.startsWith(`${from}/`) ? to + key.slice(from.length) : key] =
+			icon;
+	}
+	s.collectionIcons = renamedIcons;
 	summaryNotice('Renamed collection', result, 'bookmarks updated');
 	return result;
 }
@@ -134,6 +141,10 @@ export async function deleteCollection(
 	s.knownCollections = s.knownCollections.filter(
 		(c) => c !== path && !c.startsWith(`${path}/`)
 	);
+	// Drop collectionIcons entries for the collection AND its descendants.
+	for (const key of Object.keys(s.collectionIcons)) {
+		if (key === path || key.startsWith(`${path}/`)) delete s.collectionIcons[key];
+	}
 	summaryNotice('Deleted collection', result, 'bookmarks moved to Inbox');
 	return result;
 }

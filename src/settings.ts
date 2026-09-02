@@ -21,6 +21,9 @@ export interface LinkhavenSettings {
 	collapsedNodes: string[];
 	lastFilter: Filter | null;
 	knownCollections: string[];
+	// collectionIcons: collection path -> lucide icon id, managed from the
+	// tree's context menu (no settings-tab row).
+	collectionIcons: Record<string, string>;
 }
 
 export const DEFAULT_SETTINGS: LinkhavenSettings = {
@@ -33,6 +36,7 @@ export const DEFAULT_SETTINGS: LinkhavenSettings = {
 	collapsedNodes: [],
 	lastFilter: null,
 	knownCollections: [],
+	collectionIcons: {},
 };
 
 export class LinkhavenSettingTab extends PluginSettingTab {

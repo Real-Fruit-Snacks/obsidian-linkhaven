@@ -435,6 +435,55 @@
 	background: var(--background-modifier-hover);
 }
 
+/* ---------- Icon picker ---------- */
+
+.lh-icon-picker-search {
+	width: 100%;
+	margin-bottom: var(--size-4-2);
+}
+
+.lh-icon-picker-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
+	gap: var(--size-4-1);
+	max-height: 320px;
+	overflow-y: auto;
+}
+
+.lh-icon-picker-cell {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	aspect-ratio: 1;
+	padding: var(--size-4-2);
+	border-radius: var(--radius-s);
+	border: 1px solid transparent;
+	background: transparent;
+	cursor: pointer;
+	color: var(--text-normal);
+}
+
+.lh-icon-picker-cell:hover {
+	background: var(--background-modifier-hover);
+}
+
+.lh-icon-picker-cell.is-active {
+	border-color: var(--interactive-accent);
+	background: var(--background-modifier-hover);
+}
+
+.lh-breadcrumb-icon {
+	display: inline-flex;
+	align-items: center;
+	margin-right: var(--size-4-1);
+	color: var(--text-muted);
+}
+
+.lh-breadcrumb-icon svg {
+	width: 1em;
+	height: 1em;
+}
+
 /* ---------- Mobile / small screens ---------- */
 
 @media (max-width: 480px) {
@@ -448,7 +497,8 @@
 		padding: var(--size-4-2) var(--size-4-3);
 	}
 
-	.lh-icon-btn {
+	.lh-icon-btn,
+	.lh-icon-picker-cell {
 		min-width: 44px;
 		min-height: 44px;
 	}
@@ -467,7 +517,8 @@ body.is-mobile .lh-chooser-item {
 	min-height: 44px;
 }
 
-body.is-mobile .lh-icon-btn {
+body.is-mobile .lh-icon-btn,
+body.is-mobile .lh-icon-picker-cell {
 	min-width: 44px;
 	min-height: 44px;
 }

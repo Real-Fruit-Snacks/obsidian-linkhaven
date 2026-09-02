@@ -153,6 +153,13 @@ export class BookmarkGridView extends ItemView {
 				this.labelEl.createSpan({ text: `#${f.tag}` });
 				break;
 			case 'collection': {
+				// Prepend the assigned collection icon when one is set.
+				const iconId = this.plugin.settings.collectionIcons[f.path];
+				if (iconId) {
+					const iconEl = this.labelEl.createSpan({ cls: 'lh-breadcrumb-icon' });
+					iconEl.setAttribute('aria-hidden', 'true');
+					setIcon(iconEl, iconId);
+				}
 				const parts = f.path.split('/');
 				parts.forEach((part, i) => {
 					if (i > 0) this.labelEl?.createSpan({ cls: 'lh-breadcrumb-sep', text: '/' });

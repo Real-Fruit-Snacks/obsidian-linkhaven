@@ -33,6 +33,7 @@ or Node APIs, so nothing is "desktop only".
   bookmark.
 - **Optional readable-text archive** per bookmark (Readability + Turndown, pure JS).
 - **Manage collections and tags** (rename, delete, merge-safe moves) from the tree.
+- **Collection icons** — pick a Lucide icon per collection from the tree's context menu.
 - **Drag cards onto collections** to file them, or onto a tag to add it (desktop).
 - **Linkwarden import** — collections, tags, dates and pinned links map across; existing
   URLs are skipped.
