@@ -38,11 +38,23 @@ export class BookmarkStore extends Component {
 		this.emitDebounced = debounce(() => this.emit(), NOTIFY_DEBOUNCE_MS, true);
 	}
 
-	async init(): Promise<void> {
-		this.scan();
+	/**
+	 * Wire all vault/metadata listeners. Called eagerly on plugin load so no
+	 * vault event is missed while the initial scan is deferred.
+	 */
+	registerEvents(): void {
 		this.registerEvent(
 			this.app.metadataCache.on('changed', (file) => {
 				this.updateFile(file);
+				this.emitDebounced();
+			})
+		);
+		// Self-healing: 'resolved' fires when the cache finishes its initial
+		// indexing pass (and after bulk vault changes). If the deferred
+		// startup scan ran before indexing, this picks up every bookmark.
+		this.registerEvent(
+			this.app.metadataCache.on('resolved', () => {
+				this.scan();
 				this.emitDebounced();
 			})
 		);
@@ -78,7 +90,13 @@ export class BookmarkStore extends Component {
 		);
 	}
 
-	/** Full rescan of the vault (used on load and when the folder setting changes). */
+	/** Combined convenience: eager event wiring + immediate scan. */
+	async init(): Promise<void> {
+		this.registerEvents();
+		this.scan();
+	}
+
+	/** Full rescan of the vault (used when the folder setting changes). */
 	async rescan(): Promise<void> {
 		this.scan();
 		this.emit();
@@ -90,11 +108,17 @@ export class BookmarkStore extends Component {
 		return path === folder || path.startsWith(`${folder}/`);
 	}
 
-	private scan(): void {
+	/**
+	 * Full scan of the bookmarks folder. Idempotent: rebuilds the record map
+	 * from the metadata cache. Files not yet indexed (null cache) are skipped
+	 * — the 'resolved' rescan picks them up once indexing finishes.
+	 */
+	scan(): void {
 		this.records.clear();
 		this.recentCache = null;
 		for (const file of this.app.vault.getMarkdownFiles()) {
 			if (!this.inFolder(file.path)) continue;
+			if (!this.app.metadataCache.getFileCache(file)) continue;
 			const record = this.readRecord(file);
 			if (record) this.records.set(file.path, record);
 		}
@@ -107,10 +131,14 @@ export class BookmarkStore extends Component {
 			this.records.delete(file.path);
 			return;
 		}
+		// Not yet indexed (cold start / mid-reindex): skip rather than build
+		// or keep a broken record; the 'resolved' rescan picks the file up.
+		if (!this.app.metadataCache.getFileCache(file)) return;
 		const record = this.readRecord(file);
 		if (record) {
 			this.records.set(file.path, record);
 		} else {
+			// No url in frontmatter: never keep a url-less record.
 			this.records.delete(file.path);
 		}
 	}

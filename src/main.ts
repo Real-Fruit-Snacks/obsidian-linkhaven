@@ -27,8 +27,16 @@ export default class LinkhavenPlugin extends Plugin {
 			() => this.settings.knownCollections
 		);
 		this.addChild(this.store);
-		await this.store.init();
-		for (const record of this.store.all()) this.knownPaths.add(record.path);
+		// Wire listeners eagerly so no vault event is missed, but defer the
+		// first scan until layout/vault load: on a cold start the metadata
+		// cache has not indexed the vault yet during onload, so an immediate
+		// scan would see no frontmatter. The store's 'resolved' listener
+		// rescans once initial indexing completes.
+		this.store.registerEvents();
+		this.app.workspace.onLayoutReady(() => {
+			void this.store.scan();
+			for (const record of this.store.all()) this.knownPaths.add(record.path);
+		});
 
 		this.enrichQueue = new EnrichQueue(this.app, () => this.settings, this.store);
 		this.enrichQueue.retryFailed();

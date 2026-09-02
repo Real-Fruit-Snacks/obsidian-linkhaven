@@ -1,6 +1,6 @@
 {
   "name": "linkhaven",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Linkwarden-style bookmark navigator for Obsidian: collection tree + cover-card grid over one note per bookmark.",
   "type": "module",
   "license": "MIT",
