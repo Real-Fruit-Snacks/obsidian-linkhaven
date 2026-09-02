@@ -33,7 +33,7 @@ or Node APIs, so nothing is "desktop only".
   bookmark.
 - **Optional readable-text archive** per bookmark (Readability + Turndown, pure JS).
 - **Manage collections and tags** (rename, delete, merge-safe moves) from the tree.
-- **Drag cards onto collections** to file them (desktop).
+- **Drag cards onto collections** to file them, or onto a tag to add it (desktop).
 - **Linkwarden import** — collections, tags, dates and pinned links map across; existing
   URLs are skipped.
 - **Cascade delete** — deleting a bookmark also removes its cover, favicon, and archive
@@ -103,7 +103,9 @@ bookmarks folder is picked up and enriched automatically.
 Filing is separate from saving. Notes without a `collection` key land in the **Inbox**
 smart view; move them later with the card's **Move to collection** button (or by editing
 frontmatter). Tags are editable per bookmark via the card's context menu (**Edit tags…**)
-or its tag button; global rename/remove stays in the tree.
+or its tag button — the field autocompletes from existing tags and normalizes them to the
+established (canonical) casing, and you can drag a card onto a tag row in the tree to add
+it. Global rename/remove stays in the tree.
 
 Re-saving an already-saved URL (add modal or `obsidian://bookmark-add`) opens a dialog
 that offers to **refetch the page** (overwrite title/description and re-download cover,

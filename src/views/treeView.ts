@@ -3,6 +3,7 @@ import type LinkhavenPlugin from '../main';
 import { ConfirmModal, TextInputModal, iconButton } from '../modals';
 import {
 	addCollection,
+	addTagToBookmark,
 	deleteCollection,
 	removeTag,
 	renameCollection,
@@ -88,9 +89,12 @@ export class CollectionTreeView extends ItemView {
 			}
 		});
 		// Drag-and-drop filing: cards from the grid are dropped onto collection
-		// rows (data-lh-drop = collection path) or the Inbox row (empty string).
+		// rows (data-lh-drop = collection path), the Inbox row (empty string),
+		// or tag rows (data-lh-drop-tag = tag, adds the tag to the bookmark).
 		this.registerDomEvent(this.listsEl, 'dragover', (e: DragEvent) => {
-			const row = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-drop]');
+			const row = (e.target as HTMLElement).closest<HTMLElement>(
+				'[data-lh-drop], [data-lh-drop-tag]'
+			);
 			// Only offer the drop affordance for in-app drags (note paths), so
 			// OS file drags don't light up rows they can't use.
 			if (!row || !e.dataTransfer || !e.dataTransfer.types.includes('text/plain')) return;
@@ -100,7 +104,9 @@ export class CollectionTreeView extends ItemView {
 			row.addClass('lh-drop-target');
 		});
 		this.registerDomEvent(this.listsEl, 'dragleave', (e: DragEvent) => {
-			const row = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-drop]');
+			const row = (e.target as HTMLElement).closest<HTMLElement>(
+				'[data-lh-drop], [data-lh-drop-tag]'
+			);
 			if (!row) return;
 			const related = e.relatedTarget as Node | null;
 			if (related && row.contains(related)) return;
@@ -111,11 +117,19 @@ export class CollectionTreeView extends ItemView {
 		// listen globally and sweep any stale highlight.
 		this.registerDomEvent(document, 'dragend', () => this.clearDropTargets());
 		this.registerDomEvent(this.listsEl, 'drop', (e: DragEvent) => {
-			const row = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-drop]');
+			const row = (e.target as HTMLElement).closest<HTMLElement>(
+				'[data-lh-drop], [data-lh-drop-tag]'
+			);
 			if (!row || !e.dataTransfer) return;
 			e.preventDefault();
 			row.removeClass('lh-drop-target');
-			void this.handleDrop(row.dataset['lhDrop'] ?? '', e.dataTransfer.getData('text/plain'));
+			const notePath = e.dataTransfer.getData('text/plain');
+			const tag = row.dataset['lhDropTag'];
+			if (tag !== undefined) {
+				void this.handleTagDrop(tag, notePath);
+			} else {
+				void this.handleDrop(row.dataset['lhDrop'] ?? '', notePath);
+			}
 		});
 
 		this.unsubscribe = this.plugin.store.subscribe(this.renderDebounced);
@@ -190,7 +204,11 @@ export class CollectionTreeView extends ItemView {
 		row.dataset['value'] = value;
 		// Only the Inbox smart row is a drop target; other smart rows are not.
 		if (kind === 'smart' && value === 'inbox') row.dataset['lhDrop'] = '';
-		if (kind === 'tag') row.dataset['lhMenu'] = 'tag';
+		if (kind === 'tag') {
+			row.dataset['lhMenu'] = 'tag';
+			// Tag rows are drop targets: dropping a card adds the tag.
+			row.dataset['lhDropTag'] = value;
+		}
 		if (this.filterLabel() === `${kind}:${value}` || (kind === 'all' && this.plugin.filter.kind === 'all')) {
 			row.addClass('is-active');
 		}
@@ -531,6 +549,14 @@ export class CollectionTreeView extends ItemView {
 			}
 		});
 		new Notice(collection ? `Moved to ${collection}` : 'Moved to Inbox');
+	}
+
+	/** Drop target: a tag row. Adds the tag to the dragged bookmark. */
+	private async handleTagDrop(tag: string, notePath: string): Promise<void> {
+		if (!notePath || !tag) return;
+		const file = this.app.vault.getFileByPath(notePath);
+		if (!file) return;
+		await addTagToBookmark(this.app, this.plugin.store, file, tag);
 	}
 }
 

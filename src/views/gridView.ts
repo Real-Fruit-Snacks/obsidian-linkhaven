@@ -455,7 +455,7 @@ export class BookmarkGridView extends ItemView {
 				break;
 			case 'edit-tags': {
 				const record = this.plugin.store.all().find((r) => r.path === path);
-				new EditTagsModal(this.app, file, record?.tags ?? []).open();
+				new EditTagsModal(this.app, this.plugin.store, file, record?.tags ?? []).open();
 				break;
 			}
 			case 'move':

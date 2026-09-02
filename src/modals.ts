@@ -1,7 +1,18 @@
-import { App, Component, Modal, Notice, Setting, TFile, normalizePath, setIcon } from 'obsidian';
+import {
+	AbstractInputSuggest,
+	App,
+	Component,
+	Modal,
+	Notice,
+	Setting,
+	TFile,
+	normalizePath,
+	setIcon,
+} from 'obsidian';
 import { createBookmarkNote } from './enrich';
 import { importLinkwarden } from './importer';
 import type LinkhavenPlugin from './main';
+import type { BookmarkStore } from './store';
 import { sanitizeCollectionPart } from './utils';
 
 /** Options for ConfirmModal: button label and destructive (red) styling. */
@@ -158,7 +169,7 @@ export interface TextInputModalOptions {
 export class TextInputModal extends Modal {
 	private opts: TextInputModalOptions;
 	private helper = new Component();
-	private input: import('obsidian').TextComponent | null = null;
+	protected input: import('obsidian').TextComponent | null = null;
 
 	constructor(app: App, opts: TextInputModalOptions) {
 		super(app);
@@ -229,11 +240,67 @@ export function parseTagList(raw: string): string[] {
 }
 
 /**
+ * Autocomplete for the tag input of EditTagsModal. Suggestions operate on the
+ * current comma segment (text after the last ','): store tags containing the
+ * trimmed segment (case-insensitive) that are not already entered in an
+ * earlier segment. Selecting one replaces the segment with the tag + ", " so
+ * the next tag can be typed right away.
+ */
+export class TagSuggest extends AbstractInputSuggest<string> {
+	private store: BookmarkStore;
+	private field: HTMLInputElement;
+
+	constructor(app: App, field: HTMLInputElement, store: BookmarkStore) {
+		super(app, field);
+		this.field = field;
+		this.store = store;
+	}
+
+	protected getSuggestions(query: string): string[] {
+		const tags = this.store.tags();
+		if (tags.length === 0) return [];
+		const lastComma = query.lastIndexOf(',');
+		const segment = query.slice(lastComma + 1).trim().toLowerCase();
+		const entered = new Set(
+			query
+				.slice(0, lastComma + 1)
+				.split(',')
+				.map((part) => part.trim().toLowerCase())
+				.filter((part) => part.length > 0)
+		);
+		return tags.filter((tag) => {
+			const key = tag.toLowerCase();
+			return !entered.has(key) && (segment.length === 0 || key.includes(segment));
+		});
+	}
+
+	renderSuggestion(value: string, el: HTMLElement): void {
+		const count = this.store.filter({ kind: 'tag', tag: value }).length;
+		el.setText(`${value} · ${count}`);
+	}
+
+	selectSuggestion(value: string): void {
+		const current = this.getValue();
+		const head = current.slice(0, current.lastIndexOf(',') + 1).trimEnd();
+		const next = head ? `${head} ${value}, ` : `${value}, `;
+		this.setValue(next);
+		this.field.focus();
+		this.field.setSelectionRange(next.length, next.length);
+		this.close();
+	}
+}
+
+/**
  * Edit the tags of a single bookmark note (reuses TextInputModal). An empty
  * result deletes the `tags` frontmatter key instead of writing an empty list.
+ * Submitted tags are normalized to the canonical casing of an existing store
+ * tag when they match case-insensitively.
  */
 export class EditTagsModal extends TextInputModal {
-	constructor(app: App, file: TFile, current: string[]) {
+	private store: BookmarkStore;
+	private suggest: TagSuggest | null = null;
+
+	constructor(app: App, store: BookmarkStore, file: TFile, current: string[]) {
 		super(app, {
 			title: 'Edit tags',
 			placeholder: 'comma, separated, tags',
@@ -241,7 +308,11 @@ export class EditTagsModal extends TextInputModal {
 			cta: 'Save tags',
 			validate: () => null,
 			onSubmit: (value) => {
-				const tags = parseTagList(value);
+				// Canonical casing: typing "css" stores the established "CSS".
+				const tags = parseTagList(value).map(
+					(tag) =>
+						store.tags().find((t) => t.toLowerCase() === tag.toLowerCase()) ?? tag
+				);
 				void app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
 					if (tags.length > 0) {
 						m['tags'] = tags;
@@ -251,6 +322,18 @@ export class EditTagsModal extends TextInputModal {
 				});
 			},
 		});
+		this.store = store;
+	}
+
+	onOpen(): void {
+		super.onOpen();
+		if (this.input) this.suggest = new TagSuggest(this.app, this.input.inputEl, this.store);
+	}
+
+	onClose(): void {
+		this.suggest?.close();
+		this.suggest = null;
+		super.onClose();
 	}
 }
 

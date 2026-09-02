@@ -161,6 +161,41 @@ export async function addCollection(s: LinkhavenSettings, path: string): Promise
 	s.knownCollections = Array.from(known).sort((a, b) => a.localeCompare(b));
 }
 
+/** Read a frontmatter list-of-strings key (a single string counts as one item). */
+function fmStringList(value: unknown): string[] {
+	if (Array.isArray(value)) {
+		return value
+			.map((v) => (typeof v === 'string' ? v.trim() : ''))
+			.filter((v) => v.length > 0);
+	}
+	return typeof value === 'string' && value.trim().length > 0 ? [value.trim()] : [];
+}
+
+/**
+ * Append a tag to one bookmark note (drag-a-card-onto-a-tag flow). The tag is
+ * stored with the canonical casing of the established store tag when it
+ * matches case-insensitively; duplicates (case-insensitive) are not added.
+ */
+export async function addTagToBookmark(
+	app: App,
+	store: BookmarkStore,
+	file: TFile,
+	tag: string
+): Promise<void> {
+	const canonical = store.tags().find((t) => t.toLowerCase() === tag.toLowerCase()) ?? tag;
+	const record = store.all().find((r) => r.path === file.path);
+	if (record?.tags.some((t) => t.toLowerCase() === canonical.toLowerCase())) {
+		new Notice(`Already tagged #${canonical}`);
+		return;
+	}
+	await app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
+		const current = fmStringList(m['tags']);
+		if (current.some((t) => t.toLowerCase() === canonical.toLowerCase())) return;
+		m['tags'] = [...current, canonical];
+	});
+	new Notice(`Tagged #${canonical}`);
+}
+
 /** Rename a tag across all bookmark notes (exact, case-sensitive match). */
 export async function renameTag(
 	app: App,
