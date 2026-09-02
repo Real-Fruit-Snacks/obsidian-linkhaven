@@ -14,6 +14,8 @@ or Node APIs, so nothing is "desktop only".
 
 > 📖 **Docs & demo:** https://Real-Fruit-Snacks.github.io/obsidian-linkhaven/
 
+![Linkhaven — a calm home for your web bookmarks](assets/cover.png)
+
 <!-- TODO: add a screenshot of the tree + grid here -->
 
 ## Features
