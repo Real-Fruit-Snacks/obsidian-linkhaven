@@ -1,7 +1,7 @@
 {
   "id": "linkhaven",
   "name": "Linkhaven",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "minAppVersion": "1.7.2",
   "description": "Navigate web bookmarks as vault notes with a collection tree, cover-card grid, and automatic metadata capture.",
   "author": "Real-Fruit-Snacks",

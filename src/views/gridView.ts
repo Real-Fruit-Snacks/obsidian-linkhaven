@@ -2,7 +2,7 @@ import { Debouncer, ItemView, Menu, Platform, WorkspaceLeaf, debounce, setIcon }
 import type LinkhavenPlugin from '../main';
 import { LongPressMenu, MenuAnchor } from '../longPressMenu';
 import { BookmarkRecord, VIEW_TYPE_GRID } from '../types';
-import { AddBookmarkModal, ConfirmModal, MoveToModal, iconButton } from '../modals';
+import { AddBookmarkModal, ConfirmModal, EditTagsModal, MoveToModal, iconButton } from '../modals';
 import { deleteBookmarkCascade } from '../ops';
 import { domainFromUrl } from '../utils';
 
@@ -324,6 +324,7 @@ export class BookmarkGridView extends ItemView {
 			record.pinned ? 'pin-off' : 'pin',
 			record.pinned ? 'Unpin' : 'Pin'
 		);
+		this.actionButton(actions, 'edit-tags', record.path, 'tags', 'Edit tags');
 		this.actionButton(actions, 'move', record.path, 'folder-input', 'Move to collection');
 		this.actionButton(actions, 'trash', record.path, 'trash-2', 'Move to trash');
 		return card;
@@ -404,6 +405,12 @@ export class BookmarkGridView extends ItemView {
 		);
 		menu.addItem((item) =>
 			item
+				.setTitle('Edit tags…')
+				.setIcon('tags')
+				.onClick(() => void this.handleAction('edit-tags', path))
+		);
+		menu.addItem((item) =>
+			item
 				.setTitle('Move to collection…')
 				.setIcon('folder-input')
 				.onClick(() => void this.handleAction('move', path))
@@ -446,6 +453,11 @@ export class BookmarkGridView extends ItemView {
 					m['pinned'] = m['pinned'] !== true;
 				});
 				break;
+			case 'edit-tags': {
+				const record = this.plugin.store.all().find((r) => r.path === path);
+				new EditTagsModal(this.app, file, record?.tags ?? []).open();
+				break;
+			}
 			case 'move':
 				new MoveToModal(this.app, this.plugin, file).open();
 				break;

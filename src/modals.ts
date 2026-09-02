@@ -211,6 +211,50 @@ export class TextInputModal extends Modal {
 }
 
 /**
+ * Parse a comma-separated tag list: trim each part, drop empties, and dedupe
+ * case-insensitively keeping the first occurrence's spelling.
+ */
+export function parseTagList(raw: string): string[] {
+	const seen = new Set<string>();
+	const tags: string[] = [];
+	for (const part of raw.split(',')) {
+		const tag = part.trim();
+		if (!tag) continue;
+		const key = tag.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		tags.push(tag);
+	}
+	return tags;
+}
+
+/**
+ * Edit the tags of a single bookmark note (reuses TextInputModal). An empty
+ * result deletes the `tags` frontmatter key instead of writing an empty list.
+ */
+export class EditTagsModal extends TextInputModal {
+	constructor(app: App, file: TFile, current: string[]) {
+		super(app, {
+			title: 'Edit tags',
+			placeholder: 'comma, separated, tags',
+			value: current.join(', '),
+			cta: 'Save tags',
+			validate: () => null,
+			onSubmit: (value) => {
+				const tags = parseTagList(value);
+				void app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
+					if (tags.length > 0) {
+						m['tags'] = tags;
+					} else {
+						delete m['tags'];
+					}
+				});
+			},
+		});
+	}
+}
+
+/**
  * Shown when an interactive add (modal submit or obsidian:// URI) hits an
  * already-saved URL. Enter triggers the primary action ("Refetch page").
  */

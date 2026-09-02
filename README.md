@@ -102,7 +102,8 @@ bookmarks folder is picked up and enriched automatically.
 
 Filing is separate from saving. Notes without a `collection` key land in the **Inbox**
 smart view; move them later with the card's **Move to collection** button (or by editing
-frontmatter).
+frontmatter). Tags are editable per bookmark via the card's context menu (**Edit tags…**)
+or its tag button; global rename/remove stays in the tree.
 
 Re-saving an already-saved URL (add modal or `obsidian://bookmark-add`) opens a dialog
 that offers to **refetch the page** (overwrite title/description and re-download cover,
