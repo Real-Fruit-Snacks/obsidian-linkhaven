@@ -1,4 +1,4 @@
-import { Notice, Plugin } from 'obsidian';
+import { Notice, Plugin, TFile, normalizePath } from 'obsidian';
 import { EnrichQueue, createBookmarkNote } from './enrich';
 import { AddBookmarkModal, ImportModal } from './modals';
 import { LinkhavenSettings, LinkhavenSettingTab, DEFAULT_SETTINGS } from './settings';
@@ -67,6 +67,17 @@ export default class LinkhavenPlugin extends Plugin {
 			callback: () => new AddBookmarkModal(this.app, this).open(),
 		});
 		this.addCommand({
+			id: 'capture-readable',
+			name: 'Capture readable copy for active bookmark',
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || !this.bookmarkUrlFor(file)) return false;
+				if (checking) return true;
+				void this.captureReadableCommand(file);
+				return true;
+			},
+		});
+		this.addCommand({
 			id: 'import-linkwarden',
 			name: 'Import bookmarks from Linkwarden export',
 			callback: () => new ImportModal(this.app, this).open(),
@@ -83,6 +94,29 @@ export default class LinkhavenPlugin extends Plugin {
 		this.unsubscribeStore?.();
 		this.unsubscribeStore = null;
 		// Views and store are unloaded automatically; no leaf detachment here.
+	}
+
+	/** URL frontmatter when `file` is a bookmark note inside the bookmarks folder. */
+	private bookmarkUrlFor(file: TFile): string {
+		const folder = normalizePath(this.settings.bookmarksFolder);
+		if (folder && !(file.path === folder || file.path.startsWith(`${folder}/`))) return '';
+		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+		return typeof fm?.['url'] === 'string' ? fm['url'] : '';
+	}
+
+	private async captureReadableCommand(file: TFile): Promise<void> {
+		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+		const existing = typeof fm?.['readable'] === 'string' ? fm['readable'] : '';
+		if (existing && this.app.vault.getFileByPath(existing)) {
+			new Notice('Already captured');
+			return;
+		}
+		const ok = await this.enrichQueue.captureReadableNow(file);
+		if (ok) {
+			new Notice('Readable copy captured');
+		} else {
+			new Notice('Readable capture failed for this page');
+		}
 	}
 
 	private async handleProtocolAdd(params: Record<string, string>): Promise<void> {

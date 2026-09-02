@@ -1,6 +1,5 @@
 import { App, Notice, TFile, normalizePath, requestUrl } from 'obsidian';
-import { Readability } from '@mozilla/readability';
-import TurndownService from 'turndown';
+import { ReadableResult, extractReadableMarkdown } from './readable';
 import type { LinkhavenSettings } from './settings';
 import type { BookmarkStore } from './store';
 import type { NewBookmarkInput } from './types';
@@ -264,30 +263,59 @@ export class EnrichQueue {
 		});
 
 		if (wantReadable) {
-			await this.captureReadable(file, res.text, meta, s);
+			await this.captureReadable(file, res.text, url, s);
 		}
 	}
 
+	/**
+	 * Manual capture path for the "capture-readable" command. Returns true on
+	 * success; never throws so the caller can surface a Notice instead.
+	 */
+	async captureReadableNow(file: TFile): Promise<boolean> {
+		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+		const url = typeof fm?.['url'] === 'string' ? fm['url'] : '';
+		if (!url) return false;
+		try {
+			await this.throttle();
+			const res = await requestUrl({ url, throw: false });
+			if (res.status >= 400) throw new Error(`HTTP ${res.status} for ${url}`);
+			await this.captureReadable(file, res.text, url, this.getSettings());
+			this.failed.delete(file.path);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Save a readable Markdown copy of the page into the archive folder and
+	 * link it via fm.readable. THROWS on failure so the queue records the file
+	 * in its failed set and retryFailed() picks it up on next load.
+	 */
 	private async captureReadable(
 		file: TFile,
 		html: string,
-		meta: PageMeta,
+		pageUrl: string,
 		s: LinkhavenSettings
 	): Promise<void> {
+		// Fresh document: meta extraction happened on a separate parse.
+		const doc = new DOMParser().parseFromString(html, 'text/html');
+		let result: ReadableResult | null;
 		try {
-			const doc = new DOMParser().parseFromString(html, 'text/html');
-			const article = new Readability(doc).parse();
-			if (!article || !article.content) return;
-			const markdown = new TurndownService({ headingStyle: 'atx' }).turndown(article.content);
-			await ensureFolder(this.app, s.archiveFolder);
-			const path = await uniquePathForNote(this.app, s.archiveFolder, file.basename);
-			const title = article.title || meta.title || file.basename;
-			await this.app.vault.create(path, `# ${title}\n\n${markdown}\n`);
-			await this.app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
-				m['readable'] = path;
-			});
+			result = extractReadableMarkdown(doc, pageUrl);
 		} catch (e) {
-			console.warn('Linkhaven: readable capture failed', e);
+			console.warn('Linkhaven: readable capture failed for', pageUrl, e);
+			throw e instanceof Error ? e : new Error(String(e));
 		}
+		if (!result) {
+			console.warn('Linkhaven: readable capture found no content for', pageUrl);
+			throw new Error(`No readable content for ${pageUrl}`);
+		}
+		await ensureFolder(this.app, s.archiveFolder);
+		const path = await uniquePathForNote(this.app, s.archiveFolder, file.basename);
+		await this.app.vault.create(path, result.markdown);
+		await this.app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
+			m['readable'] = path;
+		});
 	}
 }

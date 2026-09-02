@@ -23,8 +23,8 @@ or Node APIs, so nothing is "desktop only".
 - **Collection tree** with nested collections (`Dev/Tools`), live filter, and smart
   views: All, Inbox, Pinned, Unread, Recent.
 - **Cover-card grid** with `og:image` covers, favicon and letter-tile fallbacks,
-  grid/list toggle, live search, and per-card actions (open, read/unread, pin,
-  move to collection, trash).
+  grid/list toggle, "+ add / tree" toolbar buttons, live search, and per-card
+  actions (open, read/unread, pin, move to collection, trash).
 - **Automatic enrichment** — saves are zero-prompt; title, description, cover and
   favicon are fetched in the background at a polite rate, with retry on failure.
 - **Optional readable-text archive** per bookmark (Readability + Turndown, pure JS).

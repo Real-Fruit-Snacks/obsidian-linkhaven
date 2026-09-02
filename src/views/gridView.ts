@@ -1,7 +1,7 @@
 import { Debouncer, ItemView, Platform, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
 import type LinkhavenPlugin from '../main';
 import { BookmarkRecord, VIEW_TYPE_GRID } from '../types';
-import { ConfirmModal, MoveToModal, iconButton } from '../modals';
+import { AddBookmarkModal, ConfirmModal, MoveToModal, iconButton } from '../modals';
 import { domainFromUrl } from '../utils';
 
 const CHUNK_SIZE = 60;
@@ -54,6 +54,16 @@ export class BookmarkGridView extends ItemView {
 			this.query = this.searchEl?.value ?? '';
 			this.renderDebounced();
 		});
+		const addBtn = toolbar.createEl('button', { cls: 'lh-icon-btn clickable-icon' });
+		addBtn.setAttribute('aria-label', 'Add bookmark');
+		setIcon(addBtn, 'plus');
+		this.registerDomEvent(addBtn, 'click', () => {
+			new AddBookmarkModal(this.app, this.plugin).open();
+		});
+		const treeBtn = toolbar.createEl('button', { cls: 'lh-icon-btn clickable-icon' });
+		treeBtn.setAttribute('aria-label', 'Open collection tree');
+		setIcon(treeBtn, 'panel-left');
+		this.registerDomEvent(treeBtn, 'click', () => void this.plugin.openTree());
 		this.toggleEl = toolbar.createEl('button', { cls: 'lh-icon-btn clickable-icon' });
 		this.toggleEl.setAttribute('aria-label', 'Toggle grid or list');
 		setIcon(this.toggleEl, this.viewMode === 'grid' ? 'list' : 'layout-grid');
