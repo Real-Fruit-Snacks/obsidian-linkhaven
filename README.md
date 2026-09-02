@@ -28,6 +28,8 @@ or Node APIs, so nothing is "desktop only".
 - **Automatic enrichment** — saves are zero-prompt; title, description, cover and
   favicon are fetched in the background at a polite rate, with retry on failure.
 - **Optional readable-text archive** per bookmark (Readability + Turndown, pure JS).
+- **Manage collections and tags** (rename, delete, merge-safe moves) from the tree.
+- **Drag cards onto collections** to file them (desktop).
 - **Linkwarden import** — collections, tags, dates and pinned links map across; existing
   URLs are skipped.
 - **Local-first** — plain Markdown files, no account, no telemetry.

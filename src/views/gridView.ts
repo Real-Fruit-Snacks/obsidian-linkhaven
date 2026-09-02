@@ -1,4 +1,4 @@
-import { Debouncer, ItemView, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
+import { Debouncer, ItemView, Platform, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
 import type LinkhavenPlugin from '../main';
 import { BookmarkRecord, VIEW_TYPE_GRID } from '../types';
 import { ConfirmModal, MoveToModal, iconButton } from '../modals';
@@ -65,6 +65,21 @@ export class BookmarkGridView extends ItemView {
 
 		this.cardsEl = contentEl.createDiv({ cls: 'lh-cards' });
 		this.registerDomEvent(this.cardsEl, 'click', (e: MouseEvent) => void this.onCardsClick(e));
+		if (Platform.isDesktop) {
+			// Drag source: the tree's collection rows and Inbox are the targets.
+			this.registerDomEvent(this.cardsEl, 'dragstart', (e: DragEvent) => {
+				const card = (e.target as HTMLElement).closest<HTMLElement>('.lh-card');
+				const path = card?.dataset['path'];
+				if (!card || !path || !e.dataTransfer) return;
+				e.dataTransfer.setData('text/plain', path);
+				e.dataTransfer.effectAllowed = 'move';
+				card.addClass('lh-dragging');
+			});
+			this.registerDomEvent(this.cardsEl, 'dragend', (e: DragEvent) => {
+				const card = (e.target as HTMLElement).closest<HTMLElement>('.lh-card');
+				card?.removeClass('lh-dragging');
+			});
+		}
 		this.footerEl = contentEl.createDiv({ cls: 'lh-footer' });
 
 		this.unsubscribe = this.plugin.store.subscribe(this.renderDebounced);
@@ -204,6 +219,8 @@ export class BookmarkGridView extends ItemView {
 	private buildCard(record: BookmarkRecord): HTMLElement {
 		const card = createDiv({ cls: 'lh-card' });
 		card.dataset['path'] = record.path;
+		// No HTML5 drag and drop on touch; the Move-to modal is the touch path.
+		if (Platform.isDesktop) card.setAttribute('draggable', 'true');
 
 		const cover = card.createDiv({ cls: 'lh-card-cover' });
 		const coverFile = record.cover ? this.app.vault.getFileByPath(record.cover) : null;
@@ -283,7 +300,7 @@ export class BookmarkGridView extends ItemView {
 		label: string
 	): void {
 		const btn = iconButton(parent, icon, label);
-		btn.dataset['bnAction'] = action;
+		btn.dataset['lhAction'] = action;
 		btn.dataset['path'] = path;
 	}
 
@@ -293,7 +310,7 @@ export class BookmarkGridView extends ItemView {
 		if (actionEl) {
 			e.preventDefault();
 			e.stopPropagation();
-			await this.handleAction(actionEl.dataset['bnAction'] ?? '', actionEl.dataset['path'] ?? '');
+			await this.handleAction(actionEl.dataset['lhAction'] ?? '', actionEl.dataset['path'] ?? '');
 			return;
 		}
 		const card = target.closest<HTMLElement>('.lh-card');

@@ -4,6 +4,8 @@ import type LinkhavenPlugin from './main';
 import type { Filter } from './types';
 
 export interface LinkhavenSettings {
+	// knownCollections: user-created (possibly empty) collections; the store
+	// reports union(collections derived from notes, knownCollections).
 	bookmarksFolder: string;
 	coversFolder: string;
 	archiveFolder: string;
@@ -11,6 +13,7 @@ export interface LinkhavenSettings {
 	showSaveChooser: boolean;
 	collapsedNodes: string[];
 	lastFilter: Filter | null;
+	knownCollections: string[];
 }
 
 export const DEFAULT_SETTINGS: LinkhavenSettings = {
@@ -21,6 +24,7 @@ export const DEFAULT_SETTINGS: LinkhavenSettings = {
 	showSaveChooser: false,
 	collapsedNodes: [],
 	lastFilter: null,
+	knownCollections: [],
 };
 
 export class LinkhavenSettingTab extends PluginSettingTab {

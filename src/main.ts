@@ -21,7 +21,11 @@ export default class LinkhavenPlugin extends Plugin {
 		await this.loadSettings();
 		this.filter = this.settings.lastFilter ?? { kind: 'all' };
 
-		this.store = new BookmarkStore(this.app, () => this.settings.bookmarksFolder);
+		this.store = new BookmarkStore(
+			this.app,
+			() => this.settings.bookmarksFolder,
+			() => this.settings.knownCollections
+		);
 		this.addChild(this.store);
 		await this.store.init();
 		for (const record of this.store.all()) this.knownPaths.add(record.path);

@@ -1,6 +1,15 @@
-import { Debouncer, ItemView, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
+import { Debouncer, ItemView, Menu, Notice, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
 import type LinkhavenPlugin from '../main';
+import { ConfirmModal, TextInputModal, iconButton } from '../modals';
+import {
+	addCollection,
+	deleteCollection,
+	removeTag,
+	renameCollection,
+	renameTag,
+} from '../ops';
 import { Filter, SmartId, VIEW_TYPE_TREE } from '../types';
+import { sanitizeCollectionPart } from '../utils';
 
 interface TreeNode {
 	name: string;
@@ -16,11 +25,20 @@ const SMART_ROWS: { id: SmartId; label: string; icon: string }[] = [
 	{ id: 'recent', label: 'Recent', icon: 'clock' },
 ];
 
+const LONG_PRESS_MS = 500;
+/** Grace window for a synthetic click fired right after the long-press touchend. */
+const SYNTHETIC_CLICK_MS = 350;
+/** Safety net: how long click suppression may survive without any click. */
+const SUPPRESS_RESET_MS = 1000;
+
 export class CollectionTreeView extends ItemView {
 	private plugin: LinkhavenPlugin;
 	private unsubscribe: (() => void) | null = null;
 	private listsEl: HTMLElement | null = null;
 	private query = '';
+	private longPressTimer: number | null = null;
+	private suppressNextClick = false;
+	private suppressResetTimer: number | null = null;
 	private renderDebounced: Debouncer<[], void>;
 
 	constructor(leaf: WorkspaceLeaf, plugin: LinkhavenPlugin) {
@@ -59,14 +77,86 @@ export class CollectionTreeView extends ItemView {
 
 		this.listsEl = contentEl.createDiv({ cls: 'lh-tree-lists' });
 		this.registerDomEvent(this.listsEl, 'click', (e: MouseEvent) => {
+			if (this.suppressNextClick) {
+				// A long-press just opened a menu; swallow the synthetic click.
+				this.clearSuppression();
+				e.preventDefault();
+				return;
+			}
 			const el = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-action]');
 			if (!el) return;
-			const action = el.dataset['bnAction'];
+			const action = el.dataset['lhAction'];
 			if (action === 'toggle') {
 				void this.toggleCollapsed(el.dataset['path'] ?? '');
 			} else if (action === 'filter') {
 				this.applyRowFilter(el);
+			} else if (action === 'new-collection') {
+				this.promptNewCollection('');
 			}
+		});
+		this.registerDomEvent(this.listsEl, 'contextmenu', (e: MouseEvent) => {
+			const row = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-menu]');
+			if (!row) return;
+			e.preventDefault();
+			// Some mobile browsers fire contextmenu right after a long-press;
+			// the touch handler already opened the menu in that case.
+			if (this.suppressNextClick) return;
+			this.showRowMenu(row, e);
+		});
+		this.registerDomEvent(this.listsEl, 'touchstart', (e: TouchEvent) => {
+			const row = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-menu]');
+			if (!row) return;
+			const touch = e.touches[0];
+			if (!touch) return;
+			const position = { x: touch.clientX, y: touch.clientY };
+			this.clearLongPress();
+			this.longPressTimer = window.setTimeout(() => {
+				this.longPressTimer = null;
+				this.suppressNextClick = true;
+				this.showRowMenu(row, position);
+				// Safety net: if the menu is dismissed without a synthetic click
+				// (Escape key or a tap outside listsEl), don't let the flag
+				// swallow the next real click.
+				this.resetSuppressionAfter(SUPPRESS_RESET_MS);
+			}, LONG_PRESS_MS);
+		});
+		this.registerDomEvent(this.listsEl, 'touchmove', () => this.clearLongPress());
+		this.registerDomEvent(this.listsEl, 'touchend', () => {
+			this.clearLongPress();
+			// The press that opened the menu just ended; leave a brief window
+			// for a synthetic click to be swallowed, then release the flag.
+			if (this.suppressNextClick) this.resetSuppressionAfter(SYNTHETIC_CLICK_MS);
+		});
+		this.registerDomEvent(this.listsEl, 'touchcancel', () => this.clearLongPress());
+		// Drag-and-drop filing: cards from the grid are dropped onto collection
+		// rows (data-lh-drop = collection path) or the Inbox row (empty string).
+		this.registerDomEvent(this.listsEl, 'dragover', (e: DragEvent) => {
+			const row = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-drop]');
+			// Only offer the drop affordance for in-app drags (note paths), so
+			// OS file drags don't light up rows they can't use.
+			if (!row || !e.dataTransfer || !e.dataTransfer.types.includes('text/plain')) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = 'move';
+			this.clearDropTargets(row);
+			row.addClass('lh-drop-target');
+		});
+		this.registerDomEvent(this.listsEl, 'dragleave', (e: DragEvent) => {
+			const row = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-drop]');
+			if (!row) return;
+			const related = e.relatedTarget as Node | null;
+			if (related && row.contains(related)) return;
+			row.removeClass('lh-drop-target');
+		});
+		// Esc-cancelled drags don't reliably fire dragleave on the hovered row.
+		// dragend fires on the drag source (a grid card, outside listsEl), so
+		// listen globally and sweep any stale highlight.
+		this.registerDomEvent(document, 'dragend', () => this.clearDropTargets());
+		this.registerDomEvent(this.listsEl, 'drop', (e: DragEvent) => {
+			const row = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-drop]');
+			if (!row || !e.dataTransfer) return;
+			e.preventDefault();
+			row.removeClass('lh-drop-target');
+			void this.handleDrop(row.dataset['lhDrop'] ?? '', e.dataTransfer.getData('text/plain'));
 		});
 
 		this.unsubscribe = this.plugin.store.subscribe(this.renderDebounced);
@@ -76,7 +166,42 @@ export class CollectionTreeView extends ItemView {
 	async onClose(): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = null;
+		this.clearLongPress();
+		this.clearSuppression();
 		this.renderDebounced.cancel();
+	}
+
+	private clearLongPress(): void {
+		if (this.longPressTimer !== null) {
+			window.clearTimeout(this.longPressTimer);
+			this.longPressTimer = null;
+		}
+	}
+
+	/** Release the click-suppression flag and cancel any pending reset. */
+	private clearSuppression(): void {
+		this.suppressNextClick = false;
+		if (this.suppressResetTimer !== null) {
+			window.clearTimeout(this.suppressResetTimer);
+			this.suppressResetTimer = null;
+		}
+	}
+
+	/** Clear the click-suppression flag after `delay` ms, replacing any pending reset. */
+	private resetSuppressionAfter(delay: number): void {
+		if (this.suppressResetTimer !== null) window.clearTimeout(this.suppressResetTimer);
+		this.suppressResetTimer = window.setTimeout(() => {
+			this.suppressResetTimer = null;
+			this.suppressNextClick = false;
+		}, delay);
+	}
+
+	/** Remove the drop-target highlight from every row except `except`. */
+	private clearDropTargets(except?: HTMLElement): void {
+		if (!this.listsEl) return;
+		this.listsEl.querySelectorAll<HTMLElement>('.lh-drop-target').forEach((el) => {
+			if (el !== except) el.removeClass('lh-drop-target');
+		});
 	}
 
 	/** Called by the plugin when the active filter changes. */
@@ -125,11 +250,14 @@ export class CollectionTreeView extends ItemView {
 		kind: string,
 		value: string,
 		extraCls?: string
-	): void {
+	): HTMLElement {
 		const row = parent.createDiv({ cls: `lh-tree-row${extraCls ? ` ${extraCls}` : ''}` });
-		row.dataset['bnAction'] = 'filter';
+		row.dataset['lhAction'] = 'filter';
 		row.dataset['kind'] = kind;
 		row.dataset['value'] = value;
+		// Only the Inbox smart row is a drop target; other smart rows are not.
+		if (kind === 'smart' && value === 'inbox') row.dataset['lhDrop'] = '';
+		if (kind === 'tag') row.dataset['lhMenu'] = 'tag';
 		if (this.filterLabel() === `${kind}:${value}` || (kind === 'all' && this.plugin.filter.kind === 'all')) {
 			row.addClass('is-active');
 		}
@@ -138,6 +266,7 @@ export class CollectionTreeView extends ItemView {
 		setIcon(icon, iconName);
 		row.createSpan({ cls: 'lh-tree-label', text: label });
 		if (count !== null) row.createSpan({ cls: 'lh-tree-count', text: String(count) });
+		return row;
 	}
 
 	private renderLists(): void {
@@ -147,7 +276,7 @@ export class CollectionTreeView extends ItemView {
 		const store = this.plugin.store;
 		const q = this.query.trim().toLowerCase();
 
-		if (store.all().length === 0) {
+		if (store.all().length === 0 && this.plugin.settings.knownCollections.length === 0) {
 			const empty = lists.createDiv({ cls: 'lh-empty' });
 			empty.createEl('p', { text: 'No bookmarks yet' });
 			empty.createEl('p', {
@@ -169,10 +298,13 @@ export class CollectionTreeView extends ItemView {
 			this.row(views, smart.label, smart.icon, count, 'smart', smart.id);
 		}
 
-		// Collections section
+		// Collections section (with a "+" button for new root collections)
 		const root = this.buildCollectionTree(q);
 		const collSection = lists.createDiv({ cls: 'lh-tree-section' });
-		collSection.createDiv({ cls: 'lh-tree-heading', text: 'Collections' });
+		const collHeading = collSection.createDiv({ cls: 'lh-tree-heading lh-tree-heading-row' });
+		collHeading.createSpan({ text: 'Collections' });
+		const addBtn = iconButton(collHeading, 'plus', 'New collection');
+		addBtn.dataset['lhAction'] = 'new-collection';
 		if (root.children.size === 0) {
 			collSection.createDiv({
 				cls: 'lh-muted lh-tree-none',
@@ -213,15 +345,17 @@ export class CollectionTreeView extends ItemView {
 			}
 		}
 		const root: TreeNode = { name: '', path: '', children: new Map(), count: 0 };
+		// Union note-derived paths with known (possibly empty) collections.
+		const allPaths = new Set<string>([...counts.keys(), ...store.collections()]);
 		const visible = new Set<string>();
 		if (query) {
-			for (const path of counts.keys()) {
+			for (const path of allPaths) {
 				if (!path.toLowerCase().includes(query)) continue;
 				const parts = path.split('/');
 				for (let i = 1; i <= parts.length; i++) visible.add(parts.slice(0, i).join('/'));
 			}
 		}
-		for (const path of counts.keys()) {
+		for (const path of allPaths) {
 			if (query && !visible.has(path)) continue;
 			const parts = path.split('/');
 			let node = root;
@@ -249,14 +383,16 @@ export class CollectionTreeView extends ItemView {
 		const hasChildren = node.children.size > 0;
 		const wrap = parent.createDiv({ cls: 'lh-tree-node' });
 		const row = wrap.createDiv({ cls: 'lh-tree-row lh-tree-collection' });
-		row.dataset['bnAction'] = 'filter';
+		row.dataset['lhAction'] = 'filter';
 		row.dataset['kind'] = 'collection';
 		row.dataset['value'] = node.path;
+		row.dataset['lhMenu'] = 'collection';
+		row.dataset['lhDrop'] = node.path;
 		if (this.filterLabel() === `collection:${node.path}`) row.addClass('is-active');
 
 		if (hasChildren) {
 			const arrow = row.createSpan({ cls: 'lh-tree-arrow' });
-			arrow.dataset['bnAction'] = 'toggle';
+			arrow.dataset['lhAction'] = 'toggle';
 			arrow.dataset['path'] = node.path;
 			arrow.setAttribute('aria-label', collapsed ? 'Expand' : 'Collapse');
 			setIcon(arrow, collapsed ? 'chevron-right' : 'chevron-down');
@@ -273,4 +409,199 @@ export class CollectionTreeView extends ItemView {
 			}
 		}
 	}
+
+	/* ---------- Context menus (right-click / long-press) ---------- */
+
+	private showRowMenu(row: HTMLElement, anchor: MouseEvent | { x: number; y: number }): void {
+		const kind = row.dataset['lhMenu'];
+		const value = row.dataset['value'] ?? '';
+		let menu: Menu | null = null;
+		if (kind === 'collection') menu = this.collectionMenu(value);
+		else if (kind === 'tag') menu = this.tagMenu(value);
+		if (!menu) return;
+		if (anchor instanceof MouseEvent) {
+			menu.showAtMouseEvent(anchor);
+		} else {
+			menu.showAtPosition(anchor);
+		}
+	}
+
+	private collectionMenu(path: string): Menu {
+		return new Menu()
+			.addItem((item) =>
+				item
+					.setTitle('New subcollection')
+					.setIcon('folder-plus')
+					.onClick(() => this.promptNewCollection(path))
+			)
+			.addItem((item) =>
+				item
+					.setTitle('Rename')
+					.setIcon('pencil')
+					.onClick(() => this.promptRenameCollection(path))
+			)
+			.addItem((item) =>
+				item
+					.setTitle('Delete')
+					.setIcon('trash')
+					.onClick(() => this.confirmDeleteCollection(path))
+			);
+	}
+
+	private tagMenu(tag: string): Menu {
+		return new Menu()
+			.addItem((item) =>
+				item
+					.setTitle('Rename tag')
+					.setIcon('pencil')
+					.onClick(() => this.promptRenameTag(tag))
+			)
+			.addItem((item) =>
+				item
+					.setTitle('Remove tag everywhere')
+					.setIcon('trash')
+					.onClick(() => this.confirmRemoveTag(tag))
+			);
+	}
+
+	/* ---------- Collection management ---------- */
+
+	private promptNewCollection(parent: string): void {
+		new TextInputModal(this.app, {
+			title: parent ? 'New subcollection' : 'New collection',
+			placeholder: parent ? 'Name' : 'Dev/Tools',
+			cta: 'Create',
+			validate: (value) => this.validateCollectionInput(value, parent),
+			onSubmit: (value) => void this.createCollection(parent, value),
+		}).open();
+	}
+
+	private async createCollection(parent: string, value: string): Promise<void> {
+		const parts = value
+			.split('/')
+			.map((part) => part.trim())
+			.filter((part) => part.length > 0);
+		const path = parent ? `${parent}/${parts.join('/')}` : parts.join('/');
+		await addCollection(this.plugin.settings, path);
+		await this.plugin.saveSettings();
+		this.renderLists();
+	}
+
+	private promptRenameCollection(path: string): void {
+		const lastSegment = path.split('/').pop() ?? path;
+		new TextInputModal(this.app, {
+			title: 'Rename collection',
+			placeholder: 'Name',
+			value: lastSegment,
+			cta: 'Rename',
+			validate: (value) => this.validateCollectionInput(value, parentPathOf(path), path),
+			onSubmit: (value) => {
+				const parent = parentPathOf(path);
+				const to = parent ? `${parent}/${value}` : value;
+				void this.runCollectionOp(() =>
+					renameCollection(this.app, this.plugin.store, this.plugin.settings, path, to)
+				);
+			},
+		}).open();
+	}
+
+	private confirmDeleteCollection(path: string): void {
+		const count = this.plugin.store.filter({ kind: 'collection', path }).length;
+		new ConfirmModal(
+			this.app,
+			`Delete collection "${path}"? ${count} bookmarks move to Inbox. Notes are not deleted.`,
+			() =>
+				void this.runCollectionOp(() =>
+					deleteCollection(this.app, this.plugin.store, this.plugin.settings, path)
+				),
+			{ confirmText: 'Delete', destructive: true }
+		).open();
+	}
+
+	/** Shared tail for collection ops: persist knownCollections, re-render. */
+	private async runCollectionOp(
+		op: () => Promise<{ updated: number; failed: number }>
+	): Promise<void> {
+		await op();
+		await this.plugin.saveSettings();
+		this.renderLists();
+	}
+
+	/**
+	 * Validate a collection name input: non-empty, every segment passes
+	 * sanitizeCollectionPart unchanged, and the resulting path (with the
+	 * optional parent prefix) is not a duplicate.
+	 */
+	private validateCollectionInput(value: string, parent: string, allowPath?: string): string | null {
+		const parts = value
+			.split('/')
+			.map((part) => part.trim())
+			.filter((part) => part.length > 0);
+		if (parts.length === 0) return 'Enter a collection name';
+		if (parts.some((part) => sanitizeCollectionPart(part) !== part)) {
+			return 'Collection names cannot contain \\ : * ? " < > | # [ ] ^';
+		}
+		const full = parent ? `${parent}/${parts.join('/')}` : parts.join('/');
+		if (allowPath !== undefined && full === allowPath) return 'Name is unchanged';
+		if (this.plugin.store.collections().includes(full)) {
+			return 'Collection already exists';
+		}
+		return null;
+	}
+
+	/* ---------- Tag management ---------- */
+
+	private promptRenameTag(tag: string): void {
+		new TextInputModal(this.app, {
+			title: 'Rename tag',
+			placeholder: 'Name',
+			value: tag,
+			cta: 'Rename',
+			validate: (value) => {
+				if (!value) return 'Enter a tag name';
+				if (value === tag) return 'Name is unchanged';
+				if (this.plugin.store.tags().includes(value)) return 'Tag already exists';
+				return null;
+			},
+			onSubmit: (value) => {
+				void renameTag(this.app, this.plugin.store, tag, value).then(() =>
+					this.renderLists()
+				);
+			},
+		}).open();
+	}
+
+	private confirmRemoveTag(tag: string): void {
+		const count = this.plugin.store.filter({ kind: 'tag', tag }).length;
+		new ConfirmModal(
+			this.app,
+			`Remove tag "${tag}" from ${count} bookmarks?`,
+			() => {
+				void removeTag(this.app, this.plugin.store, tag).then(() => this.renderLists());
+			},
+			{ confirmText: 'Remove', destructive: true }
+		).open();
+	}
+
+	/* ---------- Drag-and-drop filing ---------- */
+
+	private async handleDrop(collection: string, notePath: string): Promise<void> {
+		if (!notePath) return;
+		const file = this.app.vault.getFileByPath(notePath);
+		const record = this.plugin.store.all().find((r) => r.path === notePath);
+		if (!file || !record || record.collection === collection) return;
+		await this.app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
+			if (collection) {
+				m['collection'] = collection;
+			} else {
+				delete m['collection'];
+			}
+		});
+		new Notice(collection ? `Moved to ${collection}` : 'Moved to Inbox');
+	}
+}
+
+function parentPathOf(path: string): string {
+	const i = path.lastIndexOf('/');
+	return i > 0 ? path.slice(0, i) : '';
 }

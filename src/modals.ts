@@ -4,16 +4,29 @@ import { importLinkwarden } from './importer';
 import type LinkhavenPlugin from './main';
 import { sanitizeCollectionPart } from './utils';
 
+/** Options for ConfirmModal: button label and destructive (red) styling. */
+export interface ConfirmModalOptions {
+	confirmText?: string;
+	destructive?: boolean;
+}
+
 /** Simple confirmation dialog (Obsidian does not ship one). */
 export class ConfirmModal extends Modal {
 	private message: string;
 	private onConfirm: () => void;
+	private options: ConfirmModalOptions;
 	private helper = new Component();
 
-	constructor(app: App, message: string, onConfirm: () => void) {
+	constructor(
+		app: App,
+		message: string,
+		onConfirm: () => void,
+		options?: ConfirmModalOptions
+	) {
 		super(app);
 		this.message = message;
 		this.onConfirm = onConfirm;
+		this.options = options ?? {};
 	}
 
 	onOpen(): void {
@@ -23,7 +36,10 @@ export class ConfirmModal extends Modal {
 		contentEl.createEl('p', { text: this.message });
 		const buttons = contentEl.createDiv({ cls: 'lh-modal-buttons' });
 		const cancel = buttons.createEl('button', { text: 'Cancel' });
-		const confirm = buttons.createEl('button', { text: 'Confirm', cls: 'mod-cta' });
+		const confirm = buttons.createEl('button', {
+			text: this.options.confirmText ?? 'Confirm',
+			cls: this.options.destructive ? 'mod-warning' : 'mod-cta',
+		});
 		this.helper.registerDomEvent(cancel, 'click', () => this.close());
 		this.helper.registerDomEvent(confirm, 'click', () => {
 			this.close();
@@ -124,6 +140,73 @@ export class ChooserModal extends Modal {
 		this.helper.unload();
 		this.contentEl.empty();
 		if (!this.chosen) this.onCancel?.();
+	}
+}
+
+/** Options for the generic text-input modal (new/rename flows). */
+export interface TextInputModalOptions {
+	title: string;
+	placeholder?: string;
+	value?: string;
+	cta?: string;
+	/** Return an error message, or null when the value is acceptable. */
+	validate: (value: string) => string | null;
+	onSubmit: (value: string) => void;
+}
+
+/** Single text field with validation; Enter submits, errors show a Notice. */
+export class TextInputModal extends Modal {
+	private opts: TextInputModalOptions;
+	private helper = new Component();
+	private input: import('obsidian').TextComponent | null = null;
+
+	constructor(app: App, opts: TextInputModalOptions) {
+		super(app);
+		this.opts = opts;
+	}
+
+	onOpen(): void {
+		this.helper.load();
+		const { contentEl } = this;
+		contentEl.addClass('lh-modal');
+		contentEl.createEl('h2', { text: this.opts.title });
+
+		new Setting(contentEl).addText((text) => {
+			this.input = text;
+			text.setPlaceholder(this.opts.placeholder ?? '').setValue(this.opts.value ?? '');
+		});
+
+		const buttons = contentEl.createDiv({ cls: 'lh-modal-buttons' });
+		const cancel = buttons.createEl('button', { text: 'Cancel' });
+		const submit = buttons.createEl('button', {
+			text: this.opts.cta ?? 'Save',
+			cls: 'mod-cta',
+		});
+		this.helper.registerDomEvent(cancel, 'click', () => this.close());
+		this.helper.registerDomEvent(submit, 'click', () => this.submit());
+		this.helper.registerDomEvent(contentEl, 'keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				this.submit();
+			}
+		});
+		this.input?.inputEl.focus();
+	}
+
+	private submit(): void {
+		const value = (this.input?.getValue() ?? '').trim();
+		const error = this.opts.validate(value);
+		if (error) {
+			new Notice(error);
+			return;
+		}
+		this.close();
+		this.opts.onSubmit(value);
+	}
+
+	onClose(): void {
+		this.helper.unload();
+		this.contentEl.empty();
 	}
 }
 

@@ -24,15 +24,17 @@ function asStringList(value: unknown): string[] {
 export class BookmarkStore extends Component {
 	private app: App;
 	private getFolder: () => string;
+	private getKnownCollections: () => string[];
 	private records = new Map<string, BookmarkRecord>();
 	private listeners = new Set<() => void>();
 	private recentCache: Set<string> | null = null;
 	private emitDebounced: () => void;
 
-	constructor(app: App, getFolder: () => string) {
+	constructor(app: App, getFolder: () => string, getKnownCollections: () => string[] = () => []) {
 		super();
 		this.app = app;
 		this.getFolder = getFolder;
+		this.getKnownCollections = getKnownCollections;
 		this.emitDebounced = debounce(() => this.emit(), NOTIFY_DEBOUNCE_MS, true);
 	}
 
@@ -150,8 +152,12 @@ export class BookmarkStore extends Component {
 		return undefined;
 	}
 
+	/** Distinct sorted collection paths: notes' collections ∪ knownCollections. */
 	collections(): string[] {
 		const set = new Set<string>();
+		for (const path of this.getKnownCollections()) {
+			if (path) set.add(path);
+		}
 		for (const record of this.records.values()) {
 			if (record.collection) set.add(record.collection);
 		}
