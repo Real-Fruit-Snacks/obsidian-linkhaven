@@ -1,5 +1,6 @@
 import { App, Component, TAbstractFile, TFile, debounce, normalizePath } from 'obsidian';
 import type { BookmarkRecord, Filter } from './types';
+import { canonicalizeUrl } from './utils';
 
 const NOTIFY_DEBOUNCE_MS = 200;
 
@@ -26,6 +27,8 @@ export class BookmarkStore extends Component {
 	private getFolder: () => string;
 	private getKnownCollections: () => string[];
 	private records = new Map<string, BookmarkRecord>();
+	/** Canonical URL → record path; the single dedupe index behind byUrl(). */
+	private urlIndex = new Map<string, string>();
 	private listeners = new Set<() => void>();
 	private recentCache: Set<string> | null = null;
 	private emitDebounced: () => void;
@@ -60,7 +63,7 @@ export class BookmarkStore extends Component {
 		);
 		this.registerEvent(
 			this.app.metadataCache.on('deleted', (file) => {
-				this.records.delete(file.path);
+				this.removeRecord(file.path);
 				this.recentCache = null;
 				this.emitDebounced();
 			})
@@ -75,7 +78,7 @@ export class BookmarkStore extends Component {
 		);
 		this.registerEvent(
 			this.app.vault.on('rename', (file, oldPath) => {
-				this.records.delete(oldPath);
+				this.removeRecord(oldPath);
 				this.recentCache = null;
 				if (file instanceof TFile) this.updateFile(file);
 				this.emitDebounced();
@@ -83,7 +86,7 @@ export class BookmarkStore extends Component {
 		);
 		this.registerEvent(
 			this.app.vault.on('delete', (file: TAbstractFile) => {
-				this.records.delete(file.path);
+				this.removeRecord(file.path);
 				this.recentCache = null;
 				this.emitDebounced();
 			})
@@ -115,12 +118,13 @@ export class BookmarkStore extends Component {
 	 */
 	scan(): void {
 		this.records.clear();
+		this.urlIndex.clear();
 		this.recentCache = null;
 		for (const file of this.app.vault.getMarkdownFiles()) {
 			if (!this.inFolder(file.path)) continue;
 			if (!this.app.metadataCache.getFileCache(file)) continue;
 			const record = this.readRecord(file);
-			if (record) this.records.set(file.path, record);
+			if (record) this.indexRecord(record);
 		}
 	}
 
@@ -128,7 +132,7 @@ export class BookmarkStore extends Component {
 		if (file.extension !== 'md') return;
 		this.recentCache = null;
 		if (!this.inFolder(file.path)) {
-			this.records.delete(file.path);
+			this.removeRecord(file.path);
 			return;
 		}
 		// Not yet indexed (cold start / mid-reindex): skip rather than build
@@ -136,10 +140,29 @@ export class BookmarkStore extends Component {
 		if (!this.app.metadataCache.getFileCache(file)) return;
 		const record = this.readRecord(file);
 		if (record) {
-			this.records.set(file.path, record);
+			this.indexRecord(record);
 		} else {
 			// No url in frontmatter: never keep a url-less record.
-			this.records.delete(file.path);
+			this.removeRecord(file.path);
+		}
+	}
+
+	/** Insert/replace a record and its canonical URL index entry. */
+	private indexRecord(record: BookmarkRecord): void {
+		this.unindexPath(record.path);
+		this.records.set(record.path, record);
+		this.urlIndex.set(canonicalizeUrl(record.url), record.path);
+	}
+
+	/** Drop a record and any canonical URL index entry pointing at it. */
+	private removeRecord(path: string): void {
+		this.records.delete(path);
+		this.unindexPath(path);
+	}
+
+	private unindexPath(path: string): void {
+		for (const [canonical, recordPath] of this.urlIndex) {
+			if (recordPath === path) this.urlIndex.delete(canonical);
 		}
 	}
 
@@ -173,11 +196,13 @@ export class BookmarkStore extends Component {
 		return Array.from(this.records.values());
 	}
 
+	/**
+	 * Dedupe lookup on the canonical URL: https/http, leading "www.", host
+	 * casing, and a trailing slash all resolve to the same record.
+	 */
 	byUrl(url: string): BookmarkRecord | undefined {
-		for (const record of this.records.values()) {
-			if (record.url === url) return record;
-		}
-		return undefined;
+		const path = this.urlIndex.get(canonicalizeUrl(url));
+		return path !== undefined ? this.records.get(path) : undefined;
 	}
 
 	/** Distinct sorted collection paths: notes' collections ∪ knownCollections. */

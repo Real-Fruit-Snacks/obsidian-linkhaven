@@ -16,17 +16,18 @@ or Node APIs, so nothing is "desktop only".
 
 ![Linkhaven — a calm home for your web bookmarks](assets/cover.png)
 
-<!-- TODO: add a screenshot of the tree + grid here -->
-
 ## Features
 
 - **Collection tree** with nested collections (`Dev/Tools`), live filter, and smart
   views: All, Inbox, Pinned, Unread, Recent.
 - **Cover-card grid** with `og:image` covers, favicon and letter-tile fallbacks,
-  grid/list toggle, "+ add / tree" toolbar buttons, live search, and per-card
-  actions (open, read/unread, pin, move to collection, trash).
+  grid/list toggle, "+ add / tree" toolbar buttons, live search, per-card
+  actions (open, read/unread, pin, move to collection, trash), and a right-click
+  or long-press **context menu** on every card. With zero bookmarks, the grid
+  shows an **"Add your first bookmark"** button to get you started.
 - **Automatic enrichment** — saves are zero-prompt; title, description, cover and
-  favicon are fetched in the background at a polite rate, with retry on failure.
+  favicon are fetched in the background at a polite rate, with retry on failure
+  (the `Retry failed enrichments` command re-queues them manually).
   Notes saved with a domain file name are **renamed to the page title** once it
   is known, and favicons are **shared per domain** instead of duplicated per
   bookmark.
@@ -75,6 +76,8 @@ bookmarks folder is picked up and enriched automatically.
 
   iOS Shortcut example: a "URL" action with
   `obsidian://bookmark-add?vault=YourVault&url=[Shortcut Input]` followed by "Open URLs".
+  The **Mobile save link** row in settings copies a ready-made version of this
+  link for your vault — replace the placeholder with your shortcut's input.
   Note: Obsidian shows a confirmation dialog for URI actions until you allowlist the
   `bookmark-add` action for this plugin.
 
@@ -103,7 +106,9 @@ frontmatter).
 
 Re-saving an already-saved URL (add modal or `obsidian://bookmark-add`) opens a dialog
 that offers to **refetch the page** (overwrite title/description and re-download cover,
-favicon, and readable copy) or open the existing bookmark.
+favicon, and readable copy) or open the existing bookmark. URLs are compared in
+normalized form, so `http` vs `https`, a leading `www.`, host casing, and a trailing
+slash all count as the same bookmark.
 
 ### Sane names and shared favicons
 
@@ -144,6 +149,7 @@ artifacts stay behind.
 | Capture readable copy | off | Save a readable Markdown copy during enrichment |
 | Show save chooser | off | Collection/tag pickers in the add modal |
 | Rename notes to page title | on | Rename domain-named notes to the fetched page title after enrichment |
+| Mobile save link | — | Copy an `obsidian://` save link for share-sheet shortcuts on your phone |
 
 Tree collapse state and the last grid filter are persisted automatically.
 

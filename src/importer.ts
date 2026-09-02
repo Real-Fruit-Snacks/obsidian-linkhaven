@@ -2,7 +2,7 @@ import { App, Notice, normalizePath } from 'obsidian';
 import { createBookmarkNote } from './enrich';
 import type { LinkhavenSettings } from './settings';
 import type { BookmarkStore } from './store';
-import { sanitizeCollectionPart } from './utils';
+import { canonicalizeUrl, sanitizeCollectionPart } from './utils';
 
 interface LwTag {
 	name?: string;
@@ -108,17 +108,20 @@ export async function importLinkwarden(
 		const links = Array.isArray(collection.links) ? collection.links : [];
 		for (const link of links) {
 			const url = link.url?.trim();
-			if (!url || seenUrls.has(url) || store.byUrl(url)) {
+			// Canonicalize: http/https, www and trailing-slash variants of a URL
+			// (inside the export or already saved) all count as the same link.
+			const canonical = url ? canonicalizeUrl(url) : '';
+			if (!url || seenUrls.has(canonical) || store.byUrl(url)) {
 				skipped++;
 				continue;
 			}
-			seenUrls.add(url);
+			seenUrls.add(canonical);
 			const tags = (Array.isArray(link.tags) ? link.tags : [])
 				.map((t) => t?.name?.trim() ?? '')
 				.filter((t) => t.length > 0);
 			// created is false on dedupe (e.g. store.byUrl missed an existing
 			// note because the metadata cache lagged behind this session).
-			const { created: didCreate } = await createBookmarkNote(app, s, {
+			const { created: didCreate } = await createBookmarkNote(app, s, store, {
 				url,
 				title: link.name,
 				description: link.description,

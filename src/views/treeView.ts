@@ -8,6 +8,7 @@ import {
 	renameCollection,
 	renameTag,
 } from '../ops';
+import { LongPressMenu } from '../longPressMenu';
 import { Filter, SmartId, VIEW_TYPE_TREE } from '../types';
 import { sanitizeCollectionPart } from '../utils';
 
@@ -25,20 +26,12 @@ const SMART_ROWS: { id: SmartId; label: string; icon: string }[] = [
 	{ id: 'recent', label: 'Recent', icon: 'clock' },
 ];
 
-const LONG_PRESS_MS = 500;
-/** Grace window for a synthetic click fired right after the long-press touchend. */
-const SYNTHETIC_CLICK_MS = 350;
-/** Safety net: how long click suppression may survive without any click. */
-const SUPPRESS_RESET_MS = 1000;
-
 export class CollectionTreeView extends ItemView {
 	private plugin: LinkhavenPlugin;
 	private unsubscribe: (() => void) | null = null;
 	private listsEl: HTMLElement | null = null;
 	private query = '';
-	private longPressTimer: number | null = null;
-	private suppressNextClick = false;
-	private suppressResetTimer: number | null = null;
+	private longPressMenu: LongPressMenu | null = null;
 	private renderDebounced: Debouncer<[], void>;
 
 	constructor(leaf: WorkspaceLeaf, plugin: LinkhavenPlugin) {
@@ -76,13 +69,13 @@ export class CollectionTreeView extends ItemView {
 		});
 
 		this.listsEl = contentEl.createDiv({ cls: 'lh-tree-lists' });
+		// Right-click / long-press context menus on collection and tag rows.
+		this.longPressMenu = new LongPressMenu(this, this.listsEl, '[data-lh-menu]', (row, anchor) =>
+			this.showRowMenu(row, anchor)
+		);
 		this.registerDomEvent(this.listsEl, 'click', (e: MouseEvent) => {
-			if (this.suppressNextClick) {
-				// A long-press just opened a menu; swallow the synthetic click.
-				this.clearSuppression();
-				e.preventDefault();
-				return;
-			}
+			// A long-press just opened a menu; swallow the synthetic click.
+			if (this.longPressMenu?.swallowClick(e)) return;
 			const el = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-action]');
 			if (!el) return;
 			const action = el.dataset['lhAction'];
@@ -94,40 +87,6 @@ export class CollectionTreeView extends ItemView {
 				this.promptNewCollection('');
 			}
 		});
-		this.registerDomEvent(this.listsEl, 'contextmenu', (e: MouseEvent) => {
-			const row = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-menu]');
-			if (!row) return;
-			e.preventDefault();
-			// Some mobile browsers fire contextmenu right after a long-press;
-			// the touch handler already opened the menu in that case.
-			if (this.suppressNextClick) return;
-			this.showRowMenu(row, e);
-		});
-		this.registerDomEvent(this.listsEl, 'touchstart', (e: TouchEvent) => {
-			const row = (e.target as HTMLElement).closest<HTMLElement>('[data-lh-menu]');
-			if (!row) return;
-			const touch = e.touches[0];
-			if (!touch) return;
-			const position = { x: touch.clientX, y: touch.clientY };
-			this.clearLongPress();
-			this.longPressTimer = window.setTimeout(() => {
-				this.longPressTimer = null;
-				this.suppressNextClick = true;
-				this.showRowMenu(row, position);
-				// Safety net: if the menu is dismissed without a synthetic click
-				// (Escape key or a tap outside listsEl), don't let the flag
-				// swallow the next real click.
-				this.resetSuppressionAfter(SUPPRESS_RESET_MS);
-			}, LONG_PRESS_MS);
-		});
-		this.registerDomEvent(this.listsEl, 'touchmove', () => this.clearLongPress());
-		this.registerDomEvent(this.listsEl, 'touchend', () => {
-			this.clearLongPress();
-			// The press that opened the menu just ended; leave a brief window
-			// for a synthetic click to be swallowed, then release the flag.
-			if (this.suppressNextClick) this.resetSuppressionAfter(SYNTHETIC_CLICK_MS);
-		});
-		this.registerDomEvent(this.listsEl, 'touchcancel', () => this.clearLongPress());
 		// Drag-and-drop filing: cards from the grid are dropped onto collection
 		// rows (data-lh-drop = collection path) or the Inbox row (empty string).
 		this.registerDomEvent(this.listsEl, 'dragover', (e: DragEvent) => {
@@ -166,34 +125,8 @@ export class CollectionTreeView extends ItemView {
 	async onClose(): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = null;
-		this.clearLongPress();
-		this.clearSuppression();
+		this.longPressMenu?.unload();
 		this.renderDebounced.cancel();
-	}
-
-	private clearLongPress(): void {
-		if (this.longPressTimer !== null) {
-			window.clearTimeout(this.longPressTimer);
-			this.longPressTimer = null;
-		}
-	}
-
-	/** Release the click-suppression flag and cancel any pending reset. */
-	private clearSuppression(): void {
-		this.suppressNextClick = false;
-		if (this.suppressResetTimer !== null) {
-			window.clearTimeout(this.suppressResetTimer);
-			this.suppressResetTimer = null;
-		}
-	}
-
-	/** Clear the click-suppression flag after `delay` ms, replacing any pending reset. */
-	private resetSuppressionAfter(delay: number): void {
-		if (this.suppressResetTimer !== null) window.clearTimeout(this.suppressResetTimer);
-		this.suppressResetTimer = window.setTimeout(() => {
-			this.suppressResetTimer = null;
-			this.suppressNextClick = false;
-		}, delay);
 	}
 
 	/** Remove the drop-target highlight from every row except `except`. */

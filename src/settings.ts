@@ -1,7 +1,13 @@
-import { App, PluginSettingTab, Setting, normalizePath } from 'obsidian';
-import type { SettingDefinitionItem } from 'obsidian';
+import { App, Notice, PluginSettingTab, Setting, normalizePath } from 'obsidian';
+import type { SettingDefinitionItem, TextComponent } from 'obsidian';
 import type LinkhavenPlugin from './main';
 import type { Filter } from './types';
+
+/** Placeholder in the mobile save link that the shortcut replaces with the shared URL. */
+const MOBILE_SAVE_PLACEHOLDER = 'PASTE_OR_SHORTCUT_INPUT';
+// Kept out of line so the sentence-case lint does not rewrite "obsidian://".
+const MOBILE_SAVE_DESC =
+	'Copy an obsidian:// link you can use from a share-sheet shortcut on your phone.';
 
 export interface LinkhavenSettings {
 	// knownCollections: user-created (possibly empty) collections; the store
@@ -97,6 +103,11 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 					key: 'renameNotesToTitle',
 					defaultValue: DEFAULT_SETTINGS.renameNotesToTitle,
 				},
+			},
+			{
+				name: 'Mobile save link',
+				desc: MOBILE_SAVE_DESC,
+				action: () => void this.copyMobileSaveLink(),
 			},
 		];
 	}
@@ -202,5 +213,42 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 					await this.setControlValue('renameNotesToTitle', value);
 				})
 			);
+
+		let linkField: TextComponent | null = null;
+		new Setting(containerEl)
+			.setName('Mobile save link')
+			.setDesc(MOBILE_SAVE_DESC)
+			.addText((text) => {
+				linkField = text;
+				// Always visible and read-only: when the clipboard write fails
+				// (common on mobile), this field is the manual copy target.
+				text.setValue(this.mobileSaveUri());
+				text.inputEl.setAttribute('readonly', 'true');
+			})
+			.addButton((button) =>
+				button.setButtonText('Copy link').onClick(() => {
+					void this.copyMobileSaveLink(linkField);
+				})
+			);
+	}
+
+	/** The obsidian://bookmark-add URI with a placeholder for the shortcut input. */
+	private mobileSaveUri(): string {
+		return `obsidian://bookmark-add?vault=${encodeURIComponent(this.app.vault.getName())}&url=${MOBILE_SAVE_PLACEHOLDER}`;
+	}
+
+	private async copyMobileSaveLink(linkField?: TextComponent | null): Promise<void> {
+		const uri = this.mobileSaveUri();
+		try {
+			await navigator.clipboard.writeText(uri);
+			new Notice(`Copied — replace ${MOBILE_SAVE_PLACEHOLDER} with your shortcut input.`);
+		} catch {
+			new Notice('Copy failed — long-press to select the link');
+			// Surface the read-only field's text for manual selection.
+			if (linkField) {
+				linkField.inputEl.focus();
+				linkField.inputEl.select();
+			}
+		}
 	}
 }

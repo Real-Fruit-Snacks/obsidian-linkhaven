@@ -18,6 +18,31 @@ export function sanitizeCollectionPart(part: string): string {
 	return sanitizeFileName(part).replace(/\//g, ' ').trim();
 }
 
+/**
+ * Canonical form of a bookmark URL, used as the dedupe key everywhere
+ * (store.byUrl and every caller that goes through it): trim, default to
+ * https://, lowercase protocol and host, strip a leading "www.", drop the
+ * fragment, and drop a single trailing slash from the path (bare "/" stays).
+ * The query string is kept. Unparseable input is returned trimmed, unchanged.
+ */
+export function canonicalizeUrl(raw: string): string {
+	const trimmed = raw.trim();
+	if (!trimmed) return trimmed;
+	const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed) ? trimmed : `https://${trimmed}`;
+	try {
+		const parsed = new URL(withScheme);
+		const protocol = parsed.protocol.toLowerCase();
+		let host = parsed.hostname.toLowerCase();
+		if (host.startsWith('www.')) host = host.slice(4);
+		const port = parsed.port ? `:${parsed.port}` : '';
+		let path = parsed.pathname;
+		if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+		return `${protocol}//${host}${port}${path}${parsed.search}`;
+	} catch {
+		return trimmed;
+	}
+}
+
 export function domainFromUrl(url: string): string {
 	try {
 		const host = new URL(url).hostname;

@@ -1,5 +1,6 @@
-import { Debouncer, ItemView, Platform, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
+import { Debouncer, ItemView, Menu, Platform, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
 import type LinkhavenPlugin from '../main';
+import { LongPressMenu, MenuAnchor } from '../longPressMenu';
 import { BookmarkRecord, VIEW_TYPE_GRID } from '../types';
 import { AddBookmarkModal, ConfirmModal, MoveToModal, iconButton } from '../modals';
 import { deleteBookmarkCascade } from '../ops';
@@ -18,6 +19,7 @@ export class BookmarkGridView extends ItemView {
 	private toggleEl: HTMLElement | null = null;
 	private query = '';
 	private viewMode: 'grid' | 'list' = 'grid';
+	private cardMenu: LongPressMenu | null = null;
 	private shownCap = INITIAL_CAP;
 	private renderToken = 0;
 	private renderDebounced: Debouncer<[], void>;
@@ -75,6 +77,10 @@ export class BookmarkGridView extends ItemView {
 		});
 
 		this.cardsEl = contentEl.createDiv({ cls: 'lh-cards' });
+		// Right-click (desktop) / long-press (mobile) context menu on cards.
+		this.cardMenu = new LongPressMenu(this, this.cardsEl, '.lh-card', (card, anchor) =>
+			this.showCardMenu(card, anchor)
+		);
 		this.registerDomEvent(this.cardsEl, 'click', (e: MouseEvent) => void this.onCardsClick(e));
 		if (Platform.isDesktop) {
 			// Drag source: the tree's collection rows and Inbox are the targets.
@@ -100,6 +106,7 @@ export class BookmarkGridView extends ItemView {
 	async onClose(): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = null;
+		this.cardMenu?.unload();
 		this.renderDebounced.cancel();
 		this.renderToken++;
 	}
@@ -165,7 +172,7 @@ export class BookmarkGridView extends ItemView {
 		cards.toggleClass('lh-list', this.viewMode === 'list');
 
 		if (records.length === 0) {
-			cards.createDiv({ cls: 'lh-empty', text: this.emptyText() });
+			this.renderEmpty(cards);
 			this.renderFooter(0, 0);
 			return;
 		}
@@ -201,6 +208,25 @@ export class BookmarkGridView extends ItemView {
 				this.renderAll(false);
 			};
 		}
+	}
+
+	private renderEmpty(cards: HTMLElement): void {
+		// Truly zero bookmarks (not a filtered- or search-empty): show the
+		// first-run CTA. Also covers the known-collections-only state —
+		// collections without links still mean nothing is saved yet.
+		if (this.plugin.store.all().length > 0) {
+			cards.createDiv({ cls: 'lh-empty', text: this.emptyText() });
+			return;
+		}
+		const empty = cards.createDiv({ cls: 'lh-empty' });
+		empty.createEl('p', { cls: 'lh-empty-title', text: 'No bookmarks yet' });
+		const cta = empty.createEl('button', { cls: 'mod-cta', text: 'Add your first bookmark' });
+		// Element-attached handler: dies with the element on re-render.
+		cta.onclick = () => new AddBookmarkModal(this.app, this.plugin).open();
+		empty.createDiv({
+			cls: 'lh-empty-hint',
+			text: 'Save from your browser with the Web Clipper, or share to Obsidian on mobile.',
+		});
 	}
 
 	private emptyText(): string {
@@ -316,6 +342,8 @@ export class BookmarkGridView extends ItemView {
 	}
 
 	private async onCardsClick(e: MouseEvent): Promise<void> {
+		// A long-press just opened the card menu; swallow the synthetic click.
+		if (this.cardMenu?.swallowClick(e)) return;
 		const target = e.target as HTMLElement;
 		const actionEl = target.closest<HTMLElement>('[data-lh-action]');
 		if (actionEl) {
@@ -329,6 +357,70 @@ export class BookmarkGridView extends ItemView {
 		if (!path) return;
 		const record = this.plugin.store.all().find((r) => r.path === path);
 		if (record) window.open(record.url, '_external');
+	}
+
+	/**
+	 * Card context menu (right-click / long-press). Every item delegates to the
+	 * same handlers as the card's action buttons — no duplicated logic.
+	 */
+	private showCardMenu(card: HTMLElement, anchor: MenuAnchor): void {
+		const path = card.dataset['path'] ?? '';
+		if (!path) return;
+		const record = this.plugin.store.all().find((r) => r.path === path);
+		if (!record) return;
+		const menu = new Menu();
+		menu.addItem((item) =>
+			item
+				.setTitle('Open link')
+				.setIcon('external-link')
+				.onClick(() => window.open(record.url, '_external'))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Open note')
+				.setIcon('file-text')
+				.onClick(() => void this.handleAction('open-note', path))
+		);
+		if (record.readable) {
+			menu.addItem((item) =>
+				item
+					.setTitle('Open readable copy')
+					.setIcon('book-open')
+					.onClick(() => void this.handleAction('open-readable', path))
+			);
+		}
+		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				.setTitle(record.status === 'read' ? 'Mark as unread' : 'Mark as read')
+				.setIcon(record.status === 'read' ? 'circle' : 'check')
+				.onClick(() => void this.handleAction('toggle-read', path))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle(record.pinned ? 'Unpin' : 'Pin')
+				.setIcon('pin')
+				.onClick(() => void this.handleAction('toggle-pin', path))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Move to collection…')
+				.setIcon('folder-input')
+				.onClick(() => void this.handleAction('move', path))
+		);
+		menu.addSeparator();
+		// Routes through the same ConfirmModal + cascade delete as the trash button.
+		menu.addItem((item) =>
+			item
+				.setTitle('Delete bookmark')
+				.setIcon('trash')
+				.onClick(() => void this.handleAction('trash', path))
+		);
+		if (anchor instanceof MouseEvent) {
+			menu.showAtMouseEvent(anchor);
+		} else {
+			menu.showAtPosition(anchor);
+		}
 	}
 
 	private async handleAction(action: string, path: string): Promise<void> {

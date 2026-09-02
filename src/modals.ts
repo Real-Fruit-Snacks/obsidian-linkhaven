@@ -392,12 +392,17 @@ export class AddBookmarkModal extends Modal {
 				.split(',')
 				.map((t) => t.trim())
 				.filter((t) => t.length > 0);
-			const { file, created } = await createBookmarkNote(this.app, this.plugin.settings, {
-				url,
-				title: this.title.trim() || undefined,
-				collection: this.collection || undefined,
-				tags: tags.length > 0 ? tags : undefined,
-			});
+			const { file, created } = await createBookmarkNote(
+				this.app,
+				this.plugin.settings,
+				this.plugin.store,
+				{
+					url,
+					title: this.title.trim() || undefined,
+					collection: this.collection || undefined,
+					tags: tags.length > 0 ? tags : undefined,
+				}
+			);
 			this.close();
 			if (created) {
 				this.plugin.enrichQueue.enqueue(file);

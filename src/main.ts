@@ -90,6 +90,16 @@ export default class LinkhavenPlugin extends Plugin {
 			name: 'Import bookmarks from Linkwarden export',
 			callback: () => new ImportModal(this.app, this).open(),
 		});
+		this.addCommand({
+			id: 'retry-failed',
+			name: 'Retry failed enrichments',
+			callback: () => {
+				const count = this.enrichQueue.retryFailed();
+				new Notice(
+					count > 0 ? `Retrying ${count} failed enrichments` : 'No failed enrichments to retry'
+				);
+			},
+		});
 
 		this.registerObsidianProtocolHandler('bookmark-add', (params) => {
 			void this.handleProtocolAdd(params);
@@ -148,7 +158,7 @@ export default class LinkhavenPlugin extends Plugin {
 				.filter((part) => part.length > 0)
 				.map((part) => sanitizeCollectionPart(part))
 				.join('/');
-			const { file, created } = await createBookmarkNote(this.app, this.settings, {
+			const { file, created } = await createBookmarkNote(this.app, this.settings, this.store, {
 				url,
 				collection: collection || undefined,
 				tags: tags && tags.length > 0 ? tags : undefined,

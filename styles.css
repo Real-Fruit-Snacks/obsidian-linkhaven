@@ -376,6 +376,26 @@
 	color: var(--text-muted);
 }
 
+.lh-empty-title {
+	margin: 0 0 var(--size-4-2);
+	color: var(--text-normal);
+}
+
+.lh-empty .mod-cta {
+	margin-top: var(--size-4-2);
+}
+
+.lh-empty-hint {
+	margin-top: var(--size-4-3);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+/* The empty state (incl. the first-run CTA) spans the whole grid. */
+.lh-grid > .lh-empty {
+	grid-column: 1 / -1;
+}
+
 .lh-muted {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);

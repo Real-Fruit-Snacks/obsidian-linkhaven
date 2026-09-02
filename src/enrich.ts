@@ -5,6 +5,7 @@ import type { LinkhavenSettings } from './settings';
 import type { BookmarkStore } from './store';
 import type { NewBookmarkInput } from './types';
 import {
+	canonicalizeUrl,
 	domainFromUrl,
 	ensureFolder,
 	sanitizeFileName,
@@ -46,33 +47,42 @@ function buildNoteContent(input: NewBookmarkInput): string {
 	return lines.join('\n');
 }
 
-function findExistingByUrl(app: App, folder: string, url: string): TFile | null {
+/** Cache-lag fallback for store.byUrl; compares canonical URLs. */
+function findExistingByUrl(app: App, folder: string, canonical: string): TFile | null {
 	const dir = normalizePath(folder);
 	for (const file of app.vault.getMarkdownFiles()) {
 		if (dir && !(file.path === dir || file.path.startsWith(`${dir}/`))) continue;
 		const fm = app.metadataCache.getFileCache(file)?.frontmatter;
-		if (fm && fm['url'] === url) return file;
+		if (fm && typeof fm['url'] === 'string' && canonicalizeUrl(fm['url']) === canonical) return file;
 	}
 	return null;
 }
 
 /**
- * Create a one-note-per-bookmark Markdown file. Dedupes on url; `created` is
- * false when an existing note was returned instead of writing a new one.
+ * Create a one-note-per-bookmark Markdown file. Dedupes on the canonical URL
+ * via store.byUrl (with a canonicalized vault scan as a cache-lag fallback);
+ * `created` is false when an existing note was returned instead of writing a
+ * new one.
  */
 export async function createBookmarkNote(
 	app: App,
 	s: LinkhavenSettings,
+	store: BookmarkStore,
 	input: NewBookmarkInput
 ): Promise<{ file: TFile; created: boolean }> {
 	const folder = normalizePath(s.bookmarksFolder);
 	await ensureFolder(app, folder);
-	const existing = findExistingByUrl(app, folder, input.url);
-	if (existing) {
+	const existing = store.byUrl(input.url);
+	const existingFile = existing ? app.vault.getFileByPath(existing.path) : null;
+	if (existingFile) {
 		// Silent: interactive callers surface DuplicateModal, the importer
 		// silently counts the skip.
-		return { file: existing, created: false };
+		return { file: existingFile, created: false };
 	}
+	// The store can lag behind the metadata cache (e.g. during an import);
+	// fall back to a direct canonicalized scan before writing a duplicate.
+	const fallback = findExistingByUrl(app, folder, canonicalizeUrl(input.url));
+	if (fallback) return { file: fallback, created: false };
 	const title = input.title?.trim() ?? '';
 	const base = title || domainFromUrl(input.url) || 'Bookmark';
 	const path = await uniquePathForNote(app, folder, base);
@@ -166,11 +176,20 @@ export class EnrichQueue {
 		this.pump();
 	}
 
-	retryFailed(): void {
+	/**
+	 * Re-enqueue every note whose last enrichment failed. Returns the number
+	 * re-queued (surfaced by the "Retry failed enrichments" command).
+	 */
+	retryFailed(): number {
+		let count = 0;
 		for (const path of Array.from(this.failed)) {
 			const file = this.app.vault.getFileByPath(path);
-			if (file) this.enqueue(file);
+			if (file) {
+				this.enqueue(file);
+				count++;
+			}
 		}
+		return count;
 	}
 
 	isFailed(path: string): boolean {
