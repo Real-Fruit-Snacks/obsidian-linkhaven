@@ -1,0 +1,342 @@
+import { Debouncer, ItemView, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
+import type LinkhavenPlugin from '../main';
+import { BookmarkRecord, VIEW_TYPE_GRID } from '../types';
+import { ConfirmModal, MoveToModal, iconButton } from '../modals';
+import { domainFromUrl } from '../utils';
+
+const CHUNK_SIZE = 60;
+const INITIAL_CAP = 300;
+
+export class BookmarkGridView extends ItemView {
+	private plugin: LinkhavenPlugin;
+	private unsubscribe: (() => void) | null = null;
+	private cardsEl: HTMLElement | null = null;
+	private footerEl: HTMLElement | null = null;
+	private labelEl: HTMLElement | null = null;
+	private searchEl: HTMLInputElement | null = null;
+	private toggleEl: HTMLElement | null = null;
+	private query = '';
+	private viewMode: 'grid' | 'list' = 'grid';
+	private shownCap = INITIAL_CAP;
+	private renderToken = 0;
+	private renderDebounced: Debouncer<[], void>;
+
+	constructor(leaf: WorkspaceLeaf, plugin: LinkhavenPlugin) {
+		super(leaf);
+		this.plugin = plugin;
+		this.renderDebounced = debounce(() => this.renderAll(false), 150, true);
+	}
+
+	getViewType(): string {
+		return VIEW_TYPE_GRID;
+	}
+
+	getDisplayText(): string {
+		return 'Bookmark grid';
+	}
+
+	getIcon(): string {
+		return 'layout-grid';
+	}
+
+	async onOpen(): Promise<void> {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('lh-gridview');
+
+		const toolbar = contentEl.createDiv({ cls: 'lh-toolbar' });
+		this.labelEl = toolbar.createDiv({ cls: 'lh-toolbar-label' });
+		this.searchEl = toolbar.createEl('input', {
+			cls: 'lh-toolbar-search',
+			attr: { type: 'text', placeholder: 'Search bookmarks' },
+		});
+		this.registerDomEvent(this.searchEl, 'input', () => {
+			this.query = this.searchEl?.value ?? '';
+			this.renderDebounced();
+		});
+		this.toggleEl = toolbar.createEl('button', { cls: 'lh-icon-btn clickable-icon' });
+		this.toggleEl.setAttribute('aria-label', 'Toggle grid or list');
+		setIcon(this.toggleEl, this.viewMode === 'grid' ? 'list' : 'layout-grid');
+		this.registerDomEvent(this.toggleEl, 'click', () => {
+			this.viewMode = this.viewMode === 'grid' ? 'list' : 'grid';
+			if (this.toggleEl) setIcon(this.toggleEl, this.viewMode === 'grid' ? 'list' : 'layout-grid');
+			this.renderAll(false);
+		});
+
+		this.cardsEl = contentEl.createDiv({ cls: 'lh-cards' });
+		this.registerDomEvent(this.cardsEl, 'click', (e: MouseEvent) => void this.onCardsClick(e));
+		this.footerEl = contentEl.createDiv({ cls: 'lh-footer' });
+
+		this.unsubscribe = this.plugin.store.subscribe(this.renderDebounced);
+		this.renderAll(false);
+	}
+
+	async onClose(): Promise<void> {
+		this.unsubscribe?.();
+		this.unsubscribe = null;
+		this.renderDebounced.cancel();
+		this.renderToken++;
+	}
+
+	/** Called by the plugin when the active filter changes. */
+	refresh(): void {
+		this.renderAll(true);
+	}
+
+	/** Called by the plugin when the tree forwards its filter text. */
+	setExternalQuery(query: string): void {
+		this.query = query;
+		if (this.searchEl) this.searchEl.value = query;
+		this.renderDebounced();
+	}
+
+	private currentRecords(): BookmarkRecord[] {
+		const filter = this.plugin.filter;
+		return this.plugin.store.filter(filter).filter((r) => this.plugin.store.matches(r, filter, this.query));
+	}
+
+	private renderAll(resetCap: boolean): void {
+		if (!this.cardsEl || !this.contentEl.isConnected) return;
+		if (resetCap) this.shownCap = INITIAL_CAP;
+		this.renderLabel();
+		const records = this.currentRecords();
+		this.renderCards(records);
+	}
+
+	private renderLabel(): void {
+		if (!this.labelEl) return;
+		this.labelEl.empty();
+		const f = this.plugin.filter;
+		switch (f.kind) {
+			case 'all':
+				this.labelEl.createSpan({ text: 'All bookmarks' });
+				break;
+			case 'smart':
+				this.labelEl.createSpan({
+					text: f.id.charAt(0).toUpperCase() + f.id.slice(1),
+				});
+				break;
+			case 'tag':
+				this.labelEl.createSpan({ text: `#${f.tag}` });
+				break;
+			case 'collection': {
+				const parts = f.path.split('/');
+				parts.forEach((part, i) => {
+					if (i > 0) this.labelEl?.createSpan({ cls: 'lh-breadcrumb-sep', text: '/' });
+					this.labelEl?.createSpan({ cls: 'lh-breadcrumb', text: part });
+				});
+				break;
+			}
+		}
+	}
+
+	private renderCards(records: BookmarkRecord[]): void {
+		const cards = this.cardsEl;
+		if (!cards) return;
+		const token = ++this.renderToken;
+		cards.empty();
+		cards.toggleClass('lh-grid', this.viewMode === 'grid');
+		cards.toggleClass('lh-list', this.viewMode === 'list');
+
+		if (records.length === 0) {
+			cards.createDiv({ cls: 'lh-empty', text: this.emptyText() });
+			this.renderFooter(0, 0);
+			return;
+		}
+
+		const cap = Math.min(records.length, this.shownCap);
+		let index = 0;
+		const step = (): void => {
+			if (token !== this.renderToken || !this.cardsEl) return;
+			const end = Math.min(index + CHUNK_SIZE, cap);
+			for (; index < end; index++) {
+				const record = records[index];
+				if (record) this.cardsEl.appendChild(this.buildCard(record));
+			}
+			if (index < cap) {
+				window.requestAnimationFrame(step);
+			} else {
+				this.renderFooter(records.length, cap);
+			}
+		};
+		window.requestAnimationFrame(step);
+	}
+
+	private renderFooter(total: number, shown: number): void {
+		if (!this.footerEl) return;
+		this.footerEl.empty();
+		if (total > shown) {
+			this.footerEl.createSpan({ text: `Showing ${shown} of ${total}` });
+			const more = this.footerEl.createEl('button', { text: 'Show more' });
+			// Element-attached handler: dies with the element on re-render,
+			// unlike registerDomEvent which would accumulate listeners.
+			more.onclick = () => {
+				this.shownCap += INITIAL_CAP;
+				this.renderAll(false);
+			};
+		}
+	}
+
+	private emptyText(): string {
+		if (this.query.trim()) return 'No matches';
+		const f = this.plugin.filter;
+		switch (f.kind) {
+			case 'all':
+				return 'No bookmarks yet';
+			case 'collection':
+				return 'No bookmarks in this collection';
+			case 'tag':
+				return 'No bookmarks with this tag';
+			case 'smart':
+				switch (f.id) {
+					case 'inbox':
+						return 'Inbox is clear';
+					case 'pinned':
+						return 'No pinned bookmarks';
+					case 'unread':
+						return 'Nothing unread';
+					case 'recent':
+						return 'Nothing recent';
+				}
+		}
+	}
+
+	private buildCard(record: BookmarkRecord): HTMLElement {
+		const card = createDiv({ cls: 'lh-card' });
+		card.dataset['path'] = record.path;
+
+		const cover = card.createDiv({ cls: 'lh-card-cover' });
+		const coverFile = record.cover ? this.app.vault.getFileByPath(record.cover) : null;
+		const faviconFile = record.favicon ? this.app.vault.getFileByPath(record.favicon) : null;
+		if (coverFile) {
+			cover.createEl('img', {
+				cls: 'lh-card-img',
+				attr: { src: this.app.vault.getResourcePath(coverFile), alt: '', loading: 'lazy' },
+			});
+		} else if (faviconFile) {
+			const tile = cover.createDiv({ cls: 'lh-favicon-tile' });
+			tile.createEl('img', {
+				attr: { src: this.app.vault.getResourcePath(faviconFile), alt: '', loading: 'lazy' },
+			});
+		} else {
+			const domain = domainFromUrl(record.url);
+			cover.createDiv({
+				cls: 'lh-letter-tile',
+				text: (domain.charAt(0) || '?').toUpperCase(),
+			});
+		}
+
+		const body = card.createDiv({ cls: 'lh-card-body' });
+		body.createDiv({
+			cls: 'lh-card-title',
+			text: record.title || domainFromUrl(record.url) || record.url,
+		});
+		const meta = body.createDiv({ cls: 'lh-card-meta' });
+		if (record.status === 'unread') {
+			const dot = meta.createSpan({ cls: 'lh-status-dot' });
+			dot.setAttribute('aria-label', 'Unread');
+		}
+		if (record.pinned) {
+			const pin = meta.createSpan({ cls: 'lh-pin' });
+			pin.setAttribute('aria-label', 'Pinned');
+			setIcon(pin, 'pin');
+		}
+		meta.createSpan({ cls: 'lh-card-domain', text: domainFromUrl(record.url) });
+		if (record.created) meta.createSpan({ cls: 'lh-card-date', text: record.created });
+
+		if (record.tags.length > 0) {
+			const tags = body.createDiv({ cls: 'lh-card-tags' });
+			for (const tag of record.tags.slice(0, 4)) {
+				tags.createSpan({ cls: 'lh-tag-chip', text: tag });
+			}
+		}
+
+		const actions = body.createDiv({ cls: 'lh-card-actions' });
+		this.actionButton(actions, 'open-note', record.path, 'file-text', 'Open note');
+		if (record.readable) {
+			this.actionButton(actions, 'open-readable', record.path, 'book-open', 'Open readable copy');
+		}
+		this.actionButton(
+			actions,
+			'toggle-read',
+			record.path,
+			record.status === 'read' ? 'mail' : 'check',
+			record.status === 'read' ? 'Mark as unread' : 'Mark as read'
+		);
+		this.actionButton(
+			actions,
+			'toggle-pin',
+			record.path,
+			record.pinned ? 'pin-off' : 'pin',
+			record.pinned ? 'Unpin' : 'Pin'
+		);
+		this.actionButton(actions, 'move', record.path, 'folder-input', 'Move to collection');
+		this.actionButton(actions, 'trash', record.path, 'trash-2', 'Move to trash');
+		return card;
+	}
+
+	private actionButton(
+		parent: HTMLElement,
+		action: string,
+		path: string,
+		icon: string,
+		label: string
+	): void {
+		const btn = iconButton(parent, icon, label);
+		btn.dataset['bnAction'] = action;
+		btn.dataset['path'] = path;
+	}
+
+	private async onCardsClick(e: MouseEvent): Promise<void> {
+		const target = e.target as HTMLElement;
+		const actionEl = target.closest<HTMLElement>('[data-lh-action]');
+		if (actionEl) {
+			e.preventDefault();
+			e.stopPropagation();
+			await this.handleAction(actionEl.dataset['bnAction'] ?? '', actionEl.dataset['path'] ?? '');
+			return;
+		}
+		const card = target.closest<HTMLElement>('.lh-card');
+		const path = card?.dataset['path'];
+		if (!path) return;
+		const record = this.plugin.store.all().find((r) => r.path === path);
+		if (record) window.open(record.url, '_external');
+	}
+
+	private async handleAction(action: string, path: string): Promise<void> {
+		const file = this.app.vault.getFileByPath(path);
+		if (!file) return;
+		switch (action) {
+			case 'open-note':
+				await this.app.workspace.getLeaf('tab').openFile(file);
+				break;
+			case 'open-readable': {
+				const record = this.plugin.store.all().find((r) => r.path === path);
+				const readableFile = record?.readable ? this.app.vault.getFileByPath(record.readable) : null;
+				if (readableFile) await this.app.workspace.getLeaf('tab').openFile(readableFile);
+				break;
+			}
+			case 'toggle-read':
+				await this.app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
+					m['status'] = m['status'] === 'read' ? 'unread' : 'read';
+				});
+				break;
+			case 'toggle-pin':
+				await this.app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
+					m['pinned'] = m['pinned'] !== true;
+				});
+				break;
+			case 'move':
+				new MoveToModal(this.app, this.plugin, file).open();
+				break;
+			case 'trash': {
+				const record = this.plugin.store.all().find((r) => r.path === path);
+				const name = record?.title || file.basename;
+				new ConfirmModal(this.app, `Move "${name}" to the trash?`, () => {
+					void this.app.fileManager.trashFile(file);
+				}).open();
+				break;
+			}
+		}
+	}
+}

@@ -1,0 +1,36 @@
+name: Bug report
+description: Something in Linkhaven isn't working
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what did you see?
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Desktop (Windows)
+        - Desktop (macOS)
+        - Desktop (Linux)
+        - Mobile (iOS)
+        - Mobile (Android)
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Obsidian + plugin version
+      placeholder: "Obsidian 1.9.x, Linkhaven 0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: Console errors
+      description: Ctrl/Cmd+Shift+I → Console. Paste anything red.
+      render: text

@@ -1,0 +1,28 @@
+{
+  "name": "linkhaven",
+  "version": "0.1.0",
+  "description": "Linkwarden-style bookmark navigator for Obsidian: collection tree + cover-card grid over one note per bookmark.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "turndown": "^7.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@eslint/json": "^2.1.0",
+    "@types/turndown": "^5.0.5",
+    "esbuild": "^0.25.5",
+    "eslint": "^10.9.1",
+    "eslint-plugin-obsidianmd": "^0.4.2",
+    "obsidian": "^1.12.3",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.69.0"
+  },
+  "author": "Real-Fruit-Snacks"
+}
