@@ -1,4 +1,4 @@
-import { Debouncer, ItemView, Menu, Notice, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
+import { Debouncer, ItemView, Menu, Notice, Platform, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
 import type LinkhavenPlugin from '../main';
 import { ConfirmModal, IconPickerModal, TextInputModal, iconButton } from '../modals';
 import {
@@ -13,7 +13,7 @@ import {
 	setCollectionForPath,
 } from '../ops';
 import { LongPressMenu } from '../longPressMenu';
-import { Filter, LH_BULK_MIME, SmartId, VIEW_TYPE_TREE } from '../types';
+import { Filter, LH_BULK_MIME, LH_COLLECTION_MIME, SmartId, VIEW_TYPE_TREE } from '../types';
 import { parseBulkDragPayload, sanitizeCollectionPart } from '../utils';
 
 interface TreeNode {
@@ -29,6 +29,8 @@ const SMART_ROWS: { id: SmartId; label: string; icon: string }[] = [
 	{ id: 'unread', label: 'Unread', icon: 'mail' },
 	{ id: 'recent', label: 'Recent', icon: 'clock' },
 	{ id: 'archived', label: 'Archived', icon: 'archive' },
+	{ id: 'duplicates', label: 'Duplicates', icon: 'copy' },
+	{ id: 'deadlinks', label: 'Dead links', icon: 'unlink' },
 ];
 
 export class CollectionTreeView extends ItemView {
@@ -99,15 +101,24 @@ export class CollectionTreeView extends ItemView {
 			const row = (e.target as HTMLElement).closest<HTMLElement>(
 				'[data-lh-drop], [data-lh-drop-tag]'
 			);
-			// Only offer the drop affordance for in-app drags (note paths), so
-			// OS file drags don't light up rows they can't use. Either the
-			// single-card payload (text/plain) or the bulk-selection payload
-			// (custom mime, JSON array of paths) qualifies.
+			// Only offer the drop affordance for in-app drags (note paths or
+			// collections), so OS file drags don't light up rows they can't use.
+			// The single-card payload (text/plain), the bulk-selection payload
+			// (custom mime, JSON array of paths), and the collection-reparent
+			// payload (custom mime, collection path) all qualify.
 			if (
 				!row ||
 				!e.dataTransfer ||
 				(!e.dataTransfer.types.includes('text/plain') &&
-					!e.dataTransfer.types.includes(LH_BULK_MIME))
+					!e.dataTransfer.types.includes(LH_BULK_MIME) &&
+					!e.dataTransfer.types.includes(LH_COLLECTION_MIME))
+			)
+				return;
+			// A dragged collection can only land on collection rows (or the
+			// Inbox row = root), never on tag rows.
+			if (
+				e.dataTransfer.types.includes(LH_COLLECTION_MIME) &&
+				row.dataset['lhDrop'] === undefined
 			)
 				return;
 			e.preventDefault();
@@ -128,6 +139,28 @@ export class CollectionTreeView extends ItemView {
 		// dragend fires on the drag source (a grid card, outside listsEl), so
 		// listen globally and sweep any stale highlight.
 		this.registerDomEvent(document, 'dragend', () => this.clearDropTargets());
+		if (Platform.isDesktop) {
+			// Collection rows are drag sources too: the custom mime carries the
+			// collection path and drop targets route on it (reparent, not
+			// filing). No HTML5 drag and drop on touch — the tree context
+			// menu's Rename/New-subcollection flow is the touch path.
+			this.registerDomEvent(this.listsEl, 'dragstart', (e: DragEvent) => {
+				const row = (e.target as HTMLElement).closest<HTMLElement>(
+					'[data-lh-drag-collection]'
+				);
+				const path = row?.dataset['lhDragCollection'];
+				if (!row || !path || !e.dataTransfer) return;
+				e.dataTransfer.setData(LH_COLLECTION_MIME, path);
+				e.dataTransfer.effectAllowed = 'move';
+				row.addClass('lh-dragging');
+			});
+			this.registerDomEvent(this.listsEl, 'dragend', (e: DragEvent) => {
+				const row = (e.target as HTMLElement).closest<HTMLElement>(
+					'[data-lh-drag-collection]'
+				);
+				row?.removeClass('lh-dragging');
+			});
+		}
 		this.registerDomEvent(this.listsEl, 'drop', (e: DragEvent) => {
 			const row = (e.target as HTMLElement).closest<HTMLElement>(
 				'[data-lh-drop], [data-lh-drop-tag]'
@@ -135,6 +168,14 @@ export class CollectionTreeView extends ItemView {
 			if (!row || !e.dataTransfer) return;
 			e.preventDefault();
 			row.removeClass('lh-drop-target');
+			// Route by payload: a dragged collection reparents onto the target
+			// collection row; bookmark payloads keep the filing behavior.
+			const collectionPath = e.dataTransfer.getData(LH_COLLECTION_MIME);
+			if (collectionPath) {
+				const target = row.dataset['lhDrop'];
+				if (target !== undefined) void this.handleCollectionDrop(collectionPath, target);
+				return;
+			}
 			// Bulk drags carry the JSON array in the custom mime type; the
 			// single-card payload (text/plain) is the fallback / classic path.
 			const bulkPaths = parseBulkDragPayload(e.dataTransfer.getData(LH_BULK_MIME));
@@ -368,6 +409,12 @@ export class CollectionTreeView extends ItemView {
 		row.dataset['value'] = node.path;
 		row.dataset['lhMenu'] = 'collection';
 		row.dataset['lhDrop'] = node.path;
+		// Desktop drag source for reparenting; the payload is read from
+		// dataset in the delegated dragstart handler in onOpen.
+		if (Platform.isDesktop) {
+			row.setAttribute('draggable', 'true');
+			row.dataset['lhDragCollection'] = node.path;
+		}
 		if (this.filterLabel() === `collection:${node.path}`) row.addClass('is-active');
 
 		if (hasChildren) {
@@ -630,6 +677,27 @@ export class CollectionTreeView extends ItemView {
 			updated === paths.length
 				? `Moved ${updated} bookmarks to ${name}`
 				: `${updated} of ${paths.length} updated`
+		);
+	}
+
+	/**
+	 * Drop target: a collection row (or the Inbox row = root) receiving a
+	 * dragged collection. Reparents `from` under `target` by renaming it to
+	 * target + '/' + its leaf segment. Guards: dropping onto itself or a
+	 * descendant is rejected with a Notice; dropping onto its current parent
+	 * is a silent no-op.
+	 */
+	private async handleCollectionDrop(from: string, target: string): Promise<void> {
+		if (!from) return;
+		if (from === target || target.startsWith(`${from}/`)) {
+			new Notice("Can't nest a collection into itself");
+			return;
+		}
+		if (parentPathOf(from) === target) return;
+		const leaf = from.split('/').pop() ?? from;
+		const to = target ? `${target}/${leaf}` : leaf;
+		await this.runCollectionOp(() =>
+			renameCollection(this.app, this.plugin.store, this.plugin.settings, from, to)
 		);
 	}
 

@@ -22,7 +22,8 @@ or Node APIs, so nothing is "desktop only".
   views: All, Inbox, Pinned, Unread, Recent, Archived.
 - **Cover-card grid** with `og:image` covers, favicon and letter-tile fallbacks,
   grid/list toggle, "+ add / tree" toolbar buttons, a **sort dropdown** (newest,
-  oldest, title, or domain — applied after filtering and search), live **fuzzy
+  oldest, title, or domain — applied after filtering and search, with pinned
+  bookmarks always floating to the top regardless of the selected order), live **fuzzy
   search** across title, URL, tags, description, and collection, per-card
   actions (open, read/unread, pin, move to collection, trash), and a right-click
   or long-press **context menu** on every card with **Copy link** one tap away.
@@ -62,6 +63,9 @@ or Node APIs, so nothing is "desktop only".
   card action button (Open note, Open readable copy, Open archived version, Mark
   read or unread, Pin, Edit tags, Move to collection, Delete); the card's context
   menu always keeps every action.
+- **Bookmark launcher** — fuzzy-find any bookmark from the palette; insert links into notes without leaving the editor.
+- **Dead-link watchdog** — optional startup checks, dead cards get a badge, and the Dead links smart view collects them (Wayback snapshot one click away).
+- **More ways to save** — right-click a URL in any note, or drag a link straight onto the grid.
 - **Local-first** — plain Markdown files, no account, no telemetry.
 
 ## Install
@@ -176,7 +180,7 @@ artifacts stay behind.
 | Capture readable copy | off | Save a readable Markdown copy during enrichment |
 | Show save chooser | off | Collection/tag pickers in the add modal |
 | Rename notes to page title | on | Rename domain-named notes to the fetched page title after enrichment |
-| Grid sort | Newest first | Order of bookmarks in the grid: newest, oldest, title, or domain |
+| Grid sort | Newest first | Order of bookmarks in the grid: newest, oldest, title, or domain; pinned bookmarks always float to the top regardless of the selected order |
 | Mark as read on open | off | Silently mark a bookmark as read when its link or readable copy is opened |
 | Card buttons | all on | Choose which action buttons appear on bookmark cards; all actions stay available in the card's context menu |
 | Archive saved links to the Wayback Machine | off | Submit each saved link to the Wayback Machine after enrichment; captures are public |

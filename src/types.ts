@@ -1,4 +1,4 @@
-export type SmartId = 'inbox' | 'pinned' | 'unread' | 'recent' | 'archived';
+export type SmartId = 'inbox' | 'pinned' | 'unread' | 'recent' | 'archived' | 'duplicates' | 'deadlinks';
 
 /** Grid record ordering, applied after filter + search. */
 export type GridSort = 'newest' | 'oldest' | 'title' | 'domain';
@@ -52,6 +52,9 @@ export const VIEW_TYPE_GRID = 'linkhaven-grid';
 
 /** Custom drag-and-drop mime type carrying a JSON array of selected bookmark paths. */
 export const LH_BULK_MIME = 'application/x-lh-bookmarks';
+
+/** Custom drag-and-drop mime type carrying a dragged collection path (reparent). */
+export const LH_COLLECTION_MIME = 'application/x-lh-collection';
 
 /** Input accepted when creating a bookmark note. */
 export interface NewBookmarkInput {

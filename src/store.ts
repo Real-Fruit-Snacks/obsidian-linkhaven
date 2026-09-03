@@ -26,18 +26,26 @@ export class BookmarkStore extends Component {
 	private app: App;
 	private getFolder: () => string;
 	private getKnownCollections: () => string[];
+	private getDeadLinks: () => Record<string, { status: number; checkedAt: string }>;
 	private records = new Map<string, BookmarkRecord>();
 	/** Canonical URL → record path; the single dedupe index behind byUrl(). */
 	private urlIndex = new Map<string, string>();
 	private listeners = new Set<() => void>();
 	private recentCache: Set<string> | null = null;
+	private duplicatesCache: Set<string> | null = null;
 	private emitDebounced: () => void;
 
-	constructor(app: App, getFolder: () => string, getKnownCollections: () => string[] = () => []) {
+	constructor(
+		app: App,
+		getFolder: () => string,
+		getKnownCollections: () => string[] = () => [],
+		getDeadLinks: () => Record<string, { status: number; checkedAt: string }> = () => ({})
+	) {
 		super();
 		this.app = app;
 		this.getFolder = getFolder;
 		this.getKnownCollections = getKnownCollections;
+		this.getDeadLinks = getDeadLinks;
 		this.emitDebounced = debounce(() => this.emit(), NOTIFY_DEBOUNCE_MS, true);
 	}
 
@@ -65,6 +73,7 @@ export class BookmarkStore extends Component {
 			this.app.metadataCache.on('deleted', (file) => {
 				this.removeRecord(file.path);
 				this.recentCache = null;
+				this.duplicatesCache = null;
 				this.emitDebounced();
 			})
 		);
@@ -80,6 +89,7 @@ export class BookmarkStore extends Component {
 			this.app.vault.on('rename', (file, oldPath) => {
 				this.removeRecord(oldPath);
 				this.recentCache = null;
+				this.duplicatesCache = null;
 				if (file instanceof TFile) this.updateFile(file);
 				this.emitDebounced();
 			})
@@ -88,6 +98,7 @@ export class BookmarkStore extends Component {
 			this.app.vault.on('delete', (file: TAbstractFile) => {
 				this.removeRecord(file.path);
 				this.recentCache = null;
+				this.duplicatesCache = null;
 				this.emitDebounced();
 			})
 		);
@@ -120,6 +131,7 @@ export class BookmarkStore extends Component {
 		this.records.clear();
 		this.urlIndex.clear();
 		this.recentCache = null;
+		this.duplicatesCache = null;
 		for (const file of this.app.vault.getMarkdownFiles()) {
 			if (!this.inFolder(file.path)) continue;
 			if (!this.app.metadataCache.getFileCache(file)) continue;
@@ -131,6 +143,7 @@ export class BookmarkStore extends Component {
 	private updateFile(file: TFile): void {
 		if (file.extension !== 'md') return;
 		this.recentCache = null;
+		this.duplicatesCache = null;
 		if (!this.inFolder(file.path)) {
 			this.removeRecord(file.path);
 			return;
@@ -285,8 +298,14 @@ export class BookmarkStore extends Component {
 						return this.recentPaths().has(r.path);
 					case 'archived':
 						return !!r.wayback;
+					case 'duplicates':
+						return this.duplicatesSet().has(canonicalizeUrl(r.url));
+					case 'deadlinks':
+						return this.getDeadLinks()[canonicalizeUrl(r.url)] !== undefined;
 				}
+				return false;
 		}
+		return false;
 	}
 
 	private recentPaths(): Set<string> {
@@ -298,5 +317,25 @@ export class BookmarkStore extends Component {
 		);
 		this.recentCache = new Set(sorted.slice(0, 30).map((r) => r.path));
 		return this.recentCache;
+	}
+
+	/**
+	 * Canonical URLs shared by more than one record. Computed once per
+	 * mutation burst (cache invalidated alongside recentCache on any record
+	 * change), so smart 'duplicates' filtering is not O(n²).
+	 */
+	duplicatesSet(): Set<string> {
+		if (this.duplicatesCache) return this.duplicatesCache;
+		const counts = new Map<string, number>();
+		for (const record of this.records.values()) {
+			const canonical = canonicalizeUrl(record.url);
+			counts.set(canonical, (counts.get(canonical) ?? 0) + 1);
+		}
+		const out = new Set<string>();
+		for (const [canonical, count] of counts) {
+			if (count > 1) out.add(canonical);
+		}
+		this.duplicatesCache = out;
+		return out;
 	}
 }

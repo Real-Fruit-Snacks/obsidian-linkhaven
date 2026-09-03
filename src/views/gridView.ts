@@ -11,6 +11,7 @@ import {
 	setTooltip,
 } from 'obsidian';
 import type LinkhavenPlugin from '../main';
+import { BookmarkLauncher } from '../launcher';
 import { LongPressMenu, MenuAnchor } from '../longPressMenu';
 import {
 	BookmarkRecord,
@@ -18,6 +19,7 @@ import {
 	CardButtonId,
 	GridSort,
 	LH_BULK_MIME,
+	LH_COLLECTION_MIME,
 	VIEW_TYPE_GRID,
 } from '../types';
 import {
@@ -35,7 +37,8 @@ import {
 	deleteBookmarkCascade,
 	setStatusForPath,
 } from '../ops';
-import { domainFromUrl, sortRecords } from '../utils';
+import { canonicalizeUrl, domainFromUrl, sleep, sortRecords } from '../utils';
+import { CHECK_GAP_MS, checkLink, recordLinkCheck } from '../watchdog';
 import { isIgnoredDomain, waybackLookupUrl } from '../wayback';
 
 const CHUNK_SIZE = 60;
@@ -64,13 +67,13 @@ export class BookmarkGridView extends ItemView {
 	private selectionAnchor: string | null = null;
 	/** Toolbar-toggled selection mode (tap-to-toggle, menus suspended). */
 	private selectionMode = false;
-	/** Live state of a bulk Wayback/Refetch run; null when idle. */
+	/** Live state of a bulk Wayback/Refetch/dead-link run; null when idle. */
 	private bulkRun: {
 		total: number;
 		done: number;
 		currentDomain: string;
 		cancelled: boolean;
-		kind: 'wayback' | 'refetch';
+		kind: 'wayback' | 'refetch' | 'deadlinks';
 	} | null = null;
 	/** Note path of the item currently in flight (drives the card spinner). */
 	private bulkCurrentPath: string | null = null;
@@ -129,6 +132,12 @@ export class BookmarkGridView extends ItemView {
 			this.clearSelection(false);
 			this.renderDebounced();
 		});
+		const launcherBtn = toolbar.createEl('button', { cls: 'lh-icon-btn clickable-icon' });
+		launcherBtn.setAttribute('aria-label', 'Bookmark launcher');
+		setIcon(launcherBtn, 'zap');
+		this.registerDomEvent(launcherBtn, 'click', () => {
+			new BookmarkLauncher(this.app, this.plugin).open();
+		});
 		const addBtn = toolbar.createEl('button', { cls: 'lh-icon-btn clickable-icon' });
 		addBtn.setAttribute('aria-label', 'Add bookmark');
 		setIcon(addBtn, 'plus');
@@ -177,11 +186,13 @@ export class BookmarkGridView extends ItemView {
 				const path = card?.dataset['path'];
 				if (!card || !path || !e.dataTransfer) return;
 				// Dragging a card that is IN the selection drags the whole
-				// selection: custom mime carries the JSON array of all selected
-				// paths; text/plain keeps the dragged path for backward compat.
-				if (this.selection.has(path)) {
-					e.dataTransfer.setData(LH_BULK_MIME, JSON.stringify(Array.from(this.selection)));
-				}
+				// selection. The custom mime ALWAYS carries the JSON array of
+				// dragged paths (a 1-element array for an unselected card):
+				// drop handlers read arrays uniformly, and its presence marks
+				// this as an internal drag so drop-to-save never engages.
+				// text/plain keeps the dragged path for backward compat.
+				const draggedPaths = this.selection.has(path) ? Array.from(this.selection) : [path];
+				e.dataTransfer.setData(LH_BULK_MIME, JSON.stringify(draggedPaths));
 				e.dataTransfer.setData('text/plain', path);
 				e.dataTransfer.effectAllowed = 'move';
 				card.addClass('lh-dragging');
@@ -189,6 +200,43 @@ export class BookmarkGridView extends ItemView {
 			this.registerDomEvent(this.cardsEl, 'dragend', (e: DragEvent) => {
 				const card = (e.target as HTMLElement).closest<HTMLElement>('.lh-card');
 				card?.removeClass('lh-dragging');
+			});
+			// Drop-to-save: an external URL dragged onto the grid becomes a
+			// bookmark. Internal drags of any kind (card drags LH_BULK_MIME,
+			// collection drags LH_COLLECTION_MIME) are excluded — the tree is
+			// their drop target. contentEl is the scroll container.
+			const isExternalUrlDrag = (dt: DataTransfer | null): boolean =>
+				!!dt &&
+				!dt.types.includes(LH_BULK_MIME) &&
+				!dt.types.includes(LH_COLLECTION_MIME) &&
+				(dt.types.includes('text/uri-list') || dt.types.includes('text/plain'));
+			this.registerDomEvent(contentEl, 'dragover', (e: DragEvent) => {
+				if (!isExternalUrlDrag(e.dataTransfer)) return;
+				e.preventDefault();
+				if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+				contentEl.addClass('lh-drop-target');
+			});
+			this.registerDomEvent(contentEl, 'dragleave', (e: DragEvent) => {
+				// dragleave also fires when crossing between children; only
+				// clear the highlight when the pointer leaves the container.
+				const related = e.relatedTarget as Node | null;
+				if (!related || !contentEl.contains(related)) {
+					contentEl.removeClass('lh-drop-target');
+				}
+			});
+			this.registerDomEvent(contentEl, 'drop', (e: DragEvent) => {
+				contentEl.removeClass('lh-drop-target');
+				if (!isExternalUrlDrag(e.dataTransfer)) return;
+				e.preventDefault();
+				// uri-list first (browser drags); text/plain covers URL text
+				// drags. uri-list may hold comment lines and several URLs, so
+				// take the first http(s) match.
+				const raw =
+					e.dataTransfer?.getData('text/uri-list') ||
+					e.dataTransfer?.getData('text/plain') ||
+					'';
+				const url = /https?:\/\/\S+/.exec(raw)?.[0];
+				if (url) void this.plugin.saveBookmarkFromUrl(url);
 			});
 		}
 		this.footerEl = contentEl.createDiv({ cls: 'lh-footer' });
@@ -233,6 +281,12 @@ export class BookmarkGridView extends ItemView {
 
 	private renderAll(resetCap: boolean): void {
 		if (!this.cardsEl || !this.contentEl.isConnected) return;
+		// Card density setting: compact styles live under .lh-density-compact
+		// on the view root (styles.css); comfortable leaves the markup as-is.
+		this.contentEl.toggleClass(
+			'lh-density-compact',
+			this.plugin.settings.cardDensity === 'compact'
+		);
 		if (resetCap) this.shownCap = INITIAL_CAP;
 		// The toolbar persists across re-renders, so re-sync the sort dropdown
 		// from settings on every render: a sort changed in the settings tab
@@ -263,7 +317,10 @@ export class BookmarkGridView extends ItemView {
 				break;
 			case 'smart':
 				this.labelEl.createSpan({
-					text: f.id.charAt(0).toUpperCase() + f.id.slice(1),
+					text:
+						f.id === 'deadlinks'
+							? 'Dead links'
+							: f.id.charAt(0).toUpperCase() + f.id.slice(1),
 				});
 				break;
 			case 'tag':
@@ -401,8 +458,14 @@ export class BookmarkGridView extends ItemView {
 						return 'Nothing recent';
 					case 'archived':
 						return 'Nothing archived yet';
+					case 'duplicates':
+						return 'No duplicates found';
+					case 'deadlinks':
+						return 'No dead links found';
 				}
+				return 'No bookmarks in this view';
 		}
+		return 'No bookmarks';
 	}
 
 	private buildCard(record: BookmarkRecord): HTMLElement {
@@ -454,6 +517,13 @@ export class BookmarkGridView extends ItemView {
 			badge.setAttribute('aria-label', 'Archived to Wayback');
 			setIcon(badge, 'archive');
 			setTooltip(badge, 'Archived to Wayback');
+		}
+		const dead = this.plugin.settings.deadLinks[canonicalizeUrl(record.url)];
+		if (dead) {
+			const badge = meta.createSpan({ cls: 'lh-dead-badge' });
+			badge.setAttribute('aria-label', `Link may be dead (HTTP ${dead.status})`);
+			setIcon(badge, 'link-2-off');
+			setTooltip(badge, `Link may be dead (HTTP ${dead.status})`);
 		}
 		// Re-renders mid bulk run rebuild the card: re-apply the in-flight spinner.
 		if (record.path === this.bulkCurrentPath) {
@@ -565,23 +635,9 @@ export class BookmarkGridView extends ItemView {
 
 	/** Open the external link; mark-read-on-open applies (never to Open note). */
 	private openExternalLink(record: BookmarkRecord): void {
-		window.open(record.url, '_external');
-		void this.markReadOnOpen(record.path);
-	}
-
-	/**
-	 * markReadOnOpen setting: opening the link or the readable copy silently
-	 * sets status='read' when the bookmark is currently unread. No Notice.
-	 */
-	private async markReadOnOpen(path: string): Promise<void> {
-		if (!this.plugin.settings.markReadOnOpen) return;
-		const record = this.plugin.store.all().find((r) => r.path === path);
-		if (!record || record.status !== 'unread') return;
-		try {
-			await setStatusForPath(this.app, path, 'read');
-		} catch {
-			// Silent by design: a failed status write must not interrupt opening.
-		}
+		// Delegates to the plugin's single open path (web viewer option +
+		// mark-read-on-open), shared with the random-unread command.
+		this.plugin.openBookmarkLink(record);
 	}
 
 	/**
@@ -598,6 +654,24 @@ export class BookmarkGridView extends ItemView {
 		} else {
 			new Notice(`Wayback capture failed: ${result.error ?? 'unknown error'}`);
 		}
+	}
+
+	/**
+	 * Single dead-link check from the card context menu: updates the deadLinks
+	 * record, persists, then refreshes views so the badge/smart view update.
+	 */
+	private async checkCardLink(record: BookmarkRecord): Promise<void> {
+		const result = await checkLink(record.url);
+		if (result.status === 0) {
+			// Inconclusive (offline/DNS/TLS): leave any existing deadLinks
+			// entry untouched — offline is not dead.
+			new Notice("Couldn't reach the site — check your connection");
+			return;
+		}
+		recordLinkCheck(this.plugin.settings, record.url, result);
+		await this.plugin.saveSettings();
+		new Notice(result.alive ? 'Link is alive' : `Link is dead (HTTP ${result.status})`);
+		this.plugin.notifyViews();
 	}
 
 	private async copyLink(url: string): Promise<void> {
@@ -733,6 +807,10 @@ export class BookmarkGridView extends ItemView {
 		wayback.disabled = running;
 		wayback.onclick = () => void this.runBulk('wayback');
 
+		const checkLinks = bar.createEl('button', { text: 'Check links' });
+		checkLinks.disabled = running;
+		checkLinks.onclick = () => void this.runBulk('deadlinks');
+
 		const markRead = bar.createEl('button', { text: 'Mark read' });
 		markRead.disabled = running;
 		markRead.onclick = () => void this.runBulkSetStatus('read');
@@ -751,9 +829,13 @@ export class BookmarkGridView extends ItemView {
 	private renderBulkStatus(): void {
 		if (!this.bulkCountEl) return;
 		const run = this.bulkRun;
-		this.bulkCountEl.textContent = run
-			? `${run.kind === 'wayback' ? 'Archiving' : 'Refetching'} ${run.done}/${run.total} · ${run.currentDomain}`
-			: `${this.selection.size} selected`;
+		if (!run) {
+			this.bulkCountEl.textContent = `${this.selection.size} selected`;
+			return;
+		}
+		const verb =
+			run.kind === 'wayback' ? 'Archiving' : run.kind === 'refetch' ? 'Refetching' : 'Checking';
+		this.bulkCountEl.textContent = `${verb} ${run.done}/${run.total} · ${run.currentDomain}`;
 	}
 
 	private async runBulkAddTag(paths: string[], tag: string): Promise<void> {
@@ -772,7 +854,7 @@ export class BookmarkGridView extends ItemView {
 	 * loop with live progress in the bulk bar, a per-card spinner, and cancel
 	 * (finishes the current item, skips the rest). Selection stays intact.
 	 */
-	private async runBulk(kind: 'wayback' | 'refetch'): Promise<void> {
+	private async runBulk(kind: 'wayback' | 'refetch' | 'deadlinks'): Promise<void> {
 		if (this.bulkRun) return;
 		const records = Array.from(this.selection)
 			.map((path) => this.plugin.store.all().find((r) => r.path === path))
@@ -785,7 +867,7 @@ export class BookmarkGridView extends ItemView {
 						!isIgnoredDomain(r.url, this.plugin.settings.waybackIgnoredDomains)
 				)
 			: records
-		).map((r) => ({ path: r.path, domain: domainFromUrl(r.url) || r.url }));
+		).map((r) => ({ path: r.path, url: r.url, domain: domainFromUrl(r.url) || r.url }));
 		if (items.length === 0) {
 			if (kind === 'wayback') {
 				new Notice('Nothing to archive — already captured or ignored');
@@ -803,6 +885,7 @@ export class BookmarkGridView extends ItemView {
 		};
 		this.renderBulkBar();
 		let ok = 0;
+		let dead = 0;
 		const run = this.bulkRun;
 		try {
 			// Sequential on purpose: each item awaits the queue's throttle gap,
@@ -816,7 +899,13 @@ export class BookmarkGridView extends ItemView {
 				this.bulkCurrentPath = item.path;
 				this.setCardSpinning(item.path, true);
 				try {
-					if (file) {
+					if (kind === 'deadlinks') {
+						const result = await checkLink(item.url);
+						recordLinkCheck(this.plugin.settings, item.url, result);
+						if (!result.alive) dead++;
+						// Same politeness gap as the watchdog's full check.
+						await sleep(CHECK_GAP_MS);
+					} else if (file) {
 						if (kind === 'wayback') {
 							const result = await this.plugin.enrichQueue.archiveToWayback(file);
 							if (result.archivedUrl) ok++;
@@ -836,6 +925,12 @@ export class BookmarkGridView extends ItemView {
 			this.bulkRun = null;
 			this.renderBulkBar();
 		}
+		if (kind === 'deadlinks') {
+			// Persist the deadLinks updates once for the whole run, then refresh
+			// the views so badges and the Dead links smart view catch up.
+			await this.plugin.saveSettings();
+			this.plugin.notifyViews();
+		}
 		if (run.cancelled) {
 			new Notice(`Canceled — ${run.done} of ${run.total} done`);
 		} else if (kind === 'wayback') {
@@ -844,6 +939,8 @@ export class BookmarkGridView extends ItemView {
 					? `Archived ${ok} bookmarks to Wayback`
 					: `Archived ${ok} of ${run.total} bookmarks to Wayback`
 			);
+		} else if (kind === 'deadlinks') {
+			new Notice(`Checked ${run.done} links · ${dead} dead`);
 		} else {
 			new Notice(
 				ok === run.total ? `Refetched ${ok} bookmarks` : `Refetched ${ok} of ${run.total} bookmarks`
@@ -931,7 +1028,7 @@ export class BookmarkGridView extends ItemView {
 				.setIcon('archive')
 				.onClick(() => {
 					window.open(record.wayback ?? waybackLookupUrl(record.url), '_external');
-					void this.markReadOnOpen(path);
+					void this.plugin.markReadOnOpen(record);
 				})
 		);
 		if (!record.wayback) {
@@ -967,6 +1064,12 @@ export class BookmarkGridView extends ItemView {
 				.setTitle('Refetch page')
 				.setIcon('rotate-cw')
 				.onClick(() => void this.handleAction('refetch', path))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Check this link')
+				.setIcon('refresh-cw')
+				.onClick(() => void this.checkCardLink(record))
 		);
 		menu.addSeparator();
 		menu.addItem((item) =>
@@ -1020,7 +1123,7 @@ export class BookmarkGridView extends ItemView {
 				const readableFile = record?.readable ? this.app.vault.getFileByPath(record.readable) : null;
 				if (readableFile) {
 					await this.app.workspace.getLeaf('tab').openFile(readableFile);
-					await this.markReadOnOpen(path);
+					if (record) await this.plugin.markReadOnOpen(record);
 				}
 				break;
 			}
@@ -1029,7 +1132,7 @@ export class BookmarkGridView extends ItemView {
 				const record = this.plugin.store.all().find((r) => r.path === path);
 				if (record?.wayback) {
 					window.open(record.wayback, '_external');
-					await this.markReadOnOpen(path);
+					await this.plugin.markReadOnOpen(record);
 				}
 				break;
 			}

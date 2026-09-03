@@ -56,6 +56,8 @@ export function domainFromUrl(url: string): string {
 /**
  * Order grid records per the gridSort setting. Applied after filter + search,
  * uniformly for every filter (smart 'recent' stays the latest 30, then sorted).
+ * Pinned records always come first, regardless of the selected sort; the chosen
+ * sort applies within the pinned group and within the unpinned group alike.
  */
 export function sortRecords(records: BookmarkRecord[], sort: GridSort): BookmarkRecord[] {
 	const byPath = (a: BookmarkRecord, b: BookmarkRecord): number => a.path.localeCompare(b.path);
@@ -68,24 +70,24 @@ export function sortRecords(records: BookmarkRecord[], sort: GridSort): Bookmark
 		if (!tb) return -1;
 		return ta.localeCompare(tb);
 	};
-	const out = [...records];
+	let bySort: (a: BookmarkRecord, b: BookmarkRecord) => number;
 	switch (sort) {
 		case 'newest':
-			out.sort((a, b) => b.created.localeCompare(a.created) || byPath(a, b));
+			bySort = (a, b) => b.created.localeCompare(a.created) || byPath(a, b);
 			break;
 		case 'oldest':
-			out.sort((a, b) => a.created.localeCompare(b.created) || byPath(a, b));
+			bySort = (a, b) => a.created.localeCompare(b.created) || byPath(a, b);
 			break;
 		case 'title':
-			out.sort((a, b) => byTitle(a, b) || byPath(a, b));
+			bySort = (a, b) => byTitle(a, b) || byPath(a, b);
 			break;
 		case 'domain':
-			out.sort(
-				(a, b) =>
-					domainFromUrl(a.url).localeCompare(domainFromUrl(b.url)) || byTitle(a, b) || byPath(a, b)
-			);
+			bySort = (a, b) =>
+				domainFromUrl(a.url).localeCompare(domainFromUrl(b.url)) || byTitle(a, b) || byPath(a, b);
 			break;
 	}
+	const out = [...records];
+	out.sort((a, b) => Number(b.pinned) - Number(a.pinned) || bySort(a, b));
 	return out;
 }
 

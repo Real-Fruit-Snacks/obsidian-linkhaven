@@ -16,6 +16,18 @@ function asGridSort(value: unknown): GridSort {
 	return candidate in GRID_SORT_OPTIONS ? (candidate as GridSort) : DEFAULT_SETTINGS.gridSort;
 }
 
+const CARD_DENSITY_OPTIONS: Record<LinkhavenSettings['cardDensity'], string> = {
+	comfortable: 'Comfortable',
+	compact: 'Compact',
+};
+
+function asCardDensity(value: unknown): LinkhavenSettings['cardDensity'] {
+	const candidate = String(value);
+	return candidate in CARD_DENSITY_OPTIONS
+		? (candidate as LinkhavenSettings['cardDensity'])
+		: DEFAULT_SETTINGS.cardDensity;
+}
+
 /** Placeholder in the mobile save link that the shortcut replaces with the shared URL. */
 const MOBILE_SAVE_PLACEHOLDER = 'PASTE_OR_SHORTCUT_INPUT';
 // Kept out of line so the sentence-case lint does not rewrite "obsidian://".
@@ -73,6 +85,10 @@ export interface LinkhavenSettings {
 	renameNotesToTitle: boolean;
 	gridSort: GridSort;
 	markReadOnOpen: boolean;
+	openInWebViewer: boolean;
+	cardDensity: 'comfortable' | 'compact';
+	deadLinkCheck: boolean;
+	deadLinks: Record<string, { status: number; checkedAt: string }>;
 	// cardButtons: which card action-row buttons render; a missing key means
 	// enabled, so buttons added in future versions default on.
 	cardButtons: Record<CardButtonId, boolean>;
@@ -95,6 +111,10 @@ export const DEFAULT_SETTINGS: LinkhavenSettings = {
 	renameNotesToTitle: true,
 	gridSort: 'newest',
 	markReadOnOpen: false,
+	openInWebViewer: false,
+	cardDensity: 'comfortable',
+	deadLinkCheck: false,
+	deadLinks: {},
 	cardButtons: {
 		'open-note': true,
 		'open-readable': true,
@@ -202,6 +222,34 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 				},
 			},
 			{
+				name: 'Open links in web viewer',
+				desc: "Open links in Obsidian's web viewer instead of the system browser. Requires Obsidian 1.9.10 or newer.",
+				control: {
+					type: 'toggle',
+					key: 'openInWebViewer',
+					defaultValue: DEFAULT_SETTINGS.openInWebViewer,
+				},
+			},
+			{
+				name: 'Card density',
+				desc: 'Compact cards use smaller covers and tighter spacing in the grid.',
+				control: {
+					type: 'dropdown',
+					key: 'cardDensity',
+					options: CARD_DENSITY_OPTIONS,
+					defaultValue: DEFAULT_SETTINGS.cardDensity,
+				},
+			},
+			{
+				name: 'Check for dead links on startup',
+				desc: 'Check every saved link shortly after Obsidian starts; dead ones get a badge on their card.',
+				control: {
+					type: 'toggle',
+					key: 'deadLinkCheck',
+					defaultValue: DEFAULT_SETTINGS.deadLinkCheck,
+				},
+			},
+			{
 				// Dot-notation keys address one entry of the cardButtons record;
 				// setControlValue/getControlValue below resolve the nesting.
 				type: 'group',
@@ -304,6 +352,19 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 				s.markReadOnOpen = value === true;
 				await this.plugin.saveSettings();
 				return;
+			case 'openInWebViewer':
+				s.openInWebViewer = value === true;
+				await this.plugin.saveSettings();
+				return;
+			case 'cardDensity':
+				s.cardDensity = asCardDensity(value);
+				await this.plugin.saveSettings();
+				this.plugin.notifyViews();
+				return;
+			case 'deadLinkCheck':
+				s.deadLinkCheck = value === true;
+				await this.plugin.saveSettings();
+				return;
 			case 'autoWayback':
 				s.autoWayback = value === true;
 				await this.plugin.saveSettings();
@@ -404,6 +465,40 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.markReadOnOpen).onChange(async (value) => {
 					await this.setControlValue('markReadOnOpen', value);
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Open links in web viewer')
+			.setDesc(
+				"Open links in Obsidian's web viewer instead of the system browser. Requires Obsidian 1.9.10 or newer."
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.openInWebViewer).onChange(async (value) => {
+					await this.setControlValue('openInWebViewer', value);
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Card density')
+			.setDesc('Compact cards use smaller covers and tighter spacing in the grid.')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions(CARD_DENSITY_OPTIONS)
+					.setValue(this.plugin.settings.cardDensity)
+					.onChange(async (value) => {
+						await this.setControlValue('cardDensity', value);
+					})
+			);
+
+		new Setting(containerEl)
+			.setName('Check for dead links on startup')
+			.setDesc(
+				'Check every saved link shortly after Obsidian starts; dead ones get a badge on their card.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.deadLinkCheck).onChange(async (value) => {
+					await this.setControlValue('deadLinkCheck', value);
 				})
 			);
 

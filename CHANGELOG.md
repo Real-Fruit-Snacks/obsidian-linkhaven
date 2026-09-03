@@ -4,6 +4,29 @@ All notable changes to Linkhaven are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-09-03
+
+### Added
+- Bookmark launcher: a fuzzy palette (command or grid zap button) over every bookmark —
+  Enter opens, Cmd/Ctrl+Enter inserts a Markdown link into the active note, Alt+Enter
+  opens the readable copy.
+- Dead-link watchdog: optional check on startup, "Check for dead links" command,
+  per-card "Check this link", bulk-bar link checking with live progress, a red badge on
+  dead cards, and a Dead links smart view.
+- Save a URL from any note: right-click a link in the editor → Save to Linkhaven.
+- Drop a URL onto the bookmark grid to save it (desktop).
+- Option to open links in Obsidian's web viewer (1.9.10+) instead of the system browser.
+- "Open a random unread bookmark" command.
+- Drag a collection onto another to nest it (desktop).
+- Card density setting (comfortable/compact).
+- Duplicates smart view — find same-URL bookmarks, clean up with multi-select + delete.
+
+## [1.6.2] - 2026-09-03
+
+### Changed
+- Pinned bookmarks always float to the top of the grid, regardless of the
+  selected sort order.
+
 ## [1.6.1] - 2026-09-03
 
 ### Fixed

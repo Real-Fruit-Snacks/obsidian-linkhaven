@@ -15,10 +15,21 @@ export default defineConfig([
     rules: {
       // "Linkwarden" and the Wayback Machine are third-party brand names (see
       // SPEC.md / SPEC-v150.md); "Obsidian" is kept from the rule's defaults
-      // since a custom brands list replaces them.
+      // since a custom brands list replaces them. "Linkhaven" is this
+      // plugin's name; "Inbox" is its capitalized smart-view name.
       "obsidianmd/ui/sentence-case": [
         "warn",
-        { brands: ["Obsidian", "Linkwarden", "Wayback", "Wayback Machine", "Internet Archive"] },
+        {
+          brands: [
+            "Obsidian",
+            "Linkwarden",
+            "Wayback",
+            "Wayback Machine",
+            "Internet Archive",
+            "Linkhaven",
+            "Inbox",
+          ],
+        },
       ],
     },
   },

@@ -142,6 +142,13 @@
 	overflow-y: auto;
 }
 
+/* Drop target highlight when saving an external URL dragged onto the grid */
+.lh-gridview.lh-drop-target {
+	background: var(--background-modifier-hover);
+	outline: 2px dashed var(--interactive-accent);
+	outline-offset: -2px;
+}
+
 .lh-toolbar {
 	display: flex;
 	align-items: center;
@@ -225,7 +232,8 @@
 	border-color: var(--background-modifier-border-hover);
 }
 
-.lh-card.lh-dragging {
+.lh-card.lh-dragging,
+.lh-tree-row.lh-dragging {
 	opacity: 0.5;
 }
 
@@ -394,6 +402,18 @@
 }
 
 .lh-wayback-badge .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+/* Dead-link indicator shown in a card's meta row */
+.lh-dead-badge {
+	display: inline-flex;
+	align-items: center;
+	color: var(--text-error);
+}
+
+.lh-dead-badge .svg-icon {
 	width: 14px;
 	height: 14px;
 }
@@ -581,6 +601,47 @@
 	height: 1em;
 }
 
+/* ---------- Compact card density (settings.cardDensity = 'compact') ---------- */
+
+.lh-density-compact.lh-gridview {
+	gap: var(--size-4-1);
+	padding: var(--size-4-2);
+}
+
+.lh-density-compact .lh-cards.lh-grid {
+	grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+	gap: var(--size-4-2);
+}
+
+/* Smaller cover in grid mode; list mode keeps its fixed 72px thumbnail. */
+.lh-density-compact .lh-cards.lh-grid .lh-card-cover {
+	aspect-ratio: auto;
+	height: 90px;
+}
+
+.lh-density-compact .lh-card-body {
+	gap: 2px;
+	padding: var(--size-4-1) var(--size-4-2);
+}
+
+/* The 2-line clamp stays; only the font size shrinks. */
+.lh-density-compact .lh-card-title {
+	font-size: var(--font-ui-small);
+}
+
+.lh-density-compact .lh-card-meta {
+	gap: var(--size-4-1);
+	font-size: var(--font-ui-small);
+}
+
+.lh-density-compact .lh-card-tags {
+	gap: 2px;
+}
+
+.lh-density-compact .lh-card-actions {
+	gap: 0;
+}
+
 /* ---------- Mobile / small screens ---------- */
 
 @media (max-width: 480px) {
@@ -618,4 +679,74 @@ body.is-mobile .lh-icon-btn,
 body.is-mobile .lh-icon-picker-cell {
 	min-width: 44px;
 	min-height: 44px;
+}
+
+/* ---------- Bookmark launcher (SuggestModal) ---------- */
+
+.lh-launcher-row {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+}
+
+.lh-launcher-icon {
+	flex: 0 0 auto;
+	width: 20px;
+	height: 20px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--radius-s);
+	background: var(--background-secondary-alt);
+	overflow: hidden;
+}
+
+.lh-launcher-favicon {
+	width: 16px;
+	height: 16px;
+	object-fit: contain;
+}
+
+.lh-launcher-letter {
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-bold);
+	color: var(--text-muted);
+}
+
+.lh-launcher-body {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	align-items: baseline;
+	gap: var(--size-4-2);
+}
+
+.lh-launcher-title {
+	font-weight: var(--font-bold);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.lh-launcher-domain {
+	flex: 0 1 auto;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.lh-launcher-tags {
+	flex: 0 0 auto;
+	display: flex;
+	gap: var(--size-4-1);
+}
+
+.lh-launcher-tag {
+	font-size: var(--font-ui-smaller);
+	padding: 0 var(--size-4-1);
+	border-radius: var(--radius-s);
+	background: var(--background-secondary-alt);
+	color: var(--text-muted);
 }
