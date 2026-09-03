@@ -4,6 +4,25 @@ All notable changes to Linkhaven are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-09-03
+
+### Added
+- Refetch page per bookmark: card context menu → Refetch page re-pulls metadata and
+  re-downloads a missing or stale cover (old assets are cleaned up, not orphaned).
+- Bulk refetch: the bulk bar's Refetch button re-fetches every selected bookmark,
+  sequentially and rate-limited.
+
+## [1.2.0] - 2026-09-03
+
+### Added
+- Multi-select in the grid: Ctrl/Cmd-click toggles cards, Shift-click selects a range,
+  and a selection-mode toolbar toggle gives mobile tap-to-toggle (long-press menus are
+  suspended while it is on). The selection clears on filter or search changes.
+- Bulk action bar with a selection count, Select all / Clear, Move to…, Add tag…
+  (canonical casing), Mark read / Mark unread, and a confirmed cascade Delete.
+- Bulk drag-and-drop: dragging a selected card drags the whole selection — drop it on
+  a collection, Inbox, or a tag in the tree to move or tag all of them at once.
+
 ## [1.1.0] - 2026-09-03
 
 ### Added

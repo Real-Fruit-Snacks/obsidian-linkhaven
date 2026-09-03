@@ -224,6 +224,62 @@
 	opacity: 0.5;
 }
 
+/* Selected card: accent outline + check badge (no inline styles) */
+.lh-card {
+	position: relative;
+}
+
+.lh-card.lh-selected {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+
+.lh-card.lh-selected::before {
+	content: "";
+	position: absolute;
+	top: var(--size-4-2);
+	right: var(--size-4-2);
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	background: var(--interactive-accent);
+	z-index: 1;
+}
+
+.lh-card.lh-selected::after {
+	content: "";
+	position: absolute;
+	top: calc(var(--size-4-2) + 4px);
+	right: calc(var(--size-4-2) + 6px);
+	width: 5px;
+	height: 9px;
+	border-right: 2px solid var(--text-on-accent);
+	border-bottom: 2px solid var(--text-on-accent);
+	transform: rotate(45deg);
+	z-index: 1;
+}
+
+/* Bulk action bar (shown while the selection is non-empty) */
+.lh-bulk-bar {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	flex-wrap: wrap;
+	padding: var(--size-4-1) var(--size-4-2);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	background: var(--background-secondary);
+}
+
+.lh-bulk-count {
+	font-weight: var(--font-semibold);
+}
+
+.lh-icon-btn.is-active {
+	background: var(--background-modifier-hover);
+	color: var(--text-accent);
+}
+
 .lh-cards.lh-list .lh-card {
 	flex-direction: row;
 	align-items: stretch;

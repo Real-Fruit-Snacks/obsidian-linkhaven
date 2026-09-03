@@ -25,21 +25,26 @@ export class LongPressMenu {
 	private timer: number | null = null;
 	private suppressNextClick = false;
 	private resetTimer: number | null = null;
+	private isSuspended: (() => boolean) | null;
 
 	constructor(
 		component: Component,
 		container: HTMLElement,
 		selector: string,
-		showMenu: (target: HTMLElement, anchor: MenuAnchor) => void
+		showMenu: (target: HTMLElement, anchor: MenuAnchor) => void,
+		isSuspended?: () => boolean
 	) {
 		this.component = component;
 		this.container = container;
 		this.selector = selector;
 		this.showMenu = showMenu;
+		this.isSuspended = isSuspended ?? null;
 
 		this.component.registerDomEvent(this.container, 'contextmenu', (e: MouseEvent) => {
 			const target = (e.target as HTMLElement).closest<HTMLElement>(this.selector);
 			if (!target) return;
+			// Menus are suspended (e.g. grid selection mode): let the tap toggle.
+			if (this.isSuspended?.()) return;
 			e.preventDefault();
 			// Some mobile browsers fire contextmenu right after a long-press;
 			// the touch handler already opened the menu in that case.
@@ -49,6 +54,8 @@ export class LongPressMenu {
 		this.component.registerDomEvent(this.container, 'touchstart', (e: TouchEvent) => {
 			const target = (e.target as HTMLElement).closest<HTMLElement>(this.selector);
 			if (!target) return;
+			// Menus are suspended (e.g. grid selection mode): let the tap toggle.
+			if (this.isSuspended?.()) return;
 			const touch = e.touches[0];
 			if (!touch) return;
 			const position = { x: touch.clientX, y: touch.clientY };

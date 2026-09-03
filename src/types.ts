@@ -24,6 +24,9 @@ export interface BookmarkRecord {
 export const VIEW_TYPE_TREE = 'linkhaven-tree';
 export const VIEW_TYPE_GRID = 'linkhaven-grid';
 
+/** Custom drag-and-drop mime type carrying a JSON array of selected bookmark paths. */
+export const LH_BULK_MIME = 'application/x-lh-bookmarks';
+
 /** Input accepted when creating a bookmark note. */
 export interface NewBookmarkInput {
 	url: string;

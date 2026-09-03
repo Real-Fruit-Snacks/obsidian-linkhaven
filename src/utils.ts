@@ -119,3 +119,18 @@ export function todayString(): string {
 export function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
+
+/**
+ * Parse the custom bulk drag-and-drop payload (a JSON array of bookmark note
+ * paths). Returns [] on any malformed input — never throws.
+ */
+export function parseBulkDragPayload(raw: string): string[] {
+	if (!raw) return [];
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter((p): p is string => typeof p === 'string' && p.length > 0);
+	} catch {
+		return [];
+	}
+}

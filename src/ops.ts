@@ -55,11 +55,21 @@ export async function deleteBookmarkCascade(
 	if (cover) await trashManagedFile(app, cover, s.coversFolder);
 	// Favicons are shared per domain: keep the file while any other bookmark
 	// still references the same path. Covers/readable copies are per-bookmark
-	// and are always trashed.
+	// and are always trashed. The vault-existence check keeps a BULK delete
+	// from orphaning a favicon shared inside the deleted batch: the store's
+	// debounced refresh lags the trash operations, so a just-deleted bookmark
+	// would otherwise still count as a live reference.
 	const faviconShared =
 		favicon.length > 0 &&
 		store !== undefined &&
-		store.all().some((r) => r.path !== file.path && r.favicon === favicon);
+		store
+			.all()
+			.some(
+				(r) =>
+					r.path !== file.path &&
+					r.favicon === favicon &&
+					app.vault.getFileByPath(r.path) !== null
+			);
 	if (favicon && !faviconShared) await trashManagedFile(app, favicon, s.coversFolder);
 	if (readable) await trashManagedFile(app, readable, s.archiveFolder);
 	await app.fileManager.trashFile(file);
@@ -186,25 +196,176 @@ function fmStringList(value: unknown): string[] {
  * Append a tag to one bookmark note (drag-a-card-onto-a-tag flow). The tag is
  * stored with the canonical casing of the established store tag when it
  * matches case-insensitively; duplicates (case-insensitive) are not added.
+ * Returns true when the tag was added, false when it was already present.
+ * Bulk callers pass silent: true and emit one summary Notice instead.
  */
 export async function addTagToBookmark(
 	app: App,
 	store: BookmarkStore,
 	file: TFile,
-	tag: string
-): Promise<void> {
+	tag: string,
+	silent = false
+): Promise<boolean> {
 	const canonical = store.tags().find((t) => t.toLowerCase() === tag.toLowerCase()) ?? tag;
 	const record = store.all().find((r) => r.path === file.path);
 	if (record?.tags.some((t) => t.toLowerCase() === canonical.toLowerCase())) {
-		new Notice(`Already tagged #${canonical}`);
-		return;
+		if (!silent) new Notice(`Already tagged #${canonical}`);
+		return false;
 	}
 	await app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
 		const current = fmStringList(m['tags']);
 		if (current.some((t) => t.toLowerCase() === canonical.toLowerCase())) return;
 		m['tags'] = [...current, canonical];
 	});
-	new Notice(`Tagged #${canonical}`);
+	if (!silent) new Notice(`Tagged #${canonical}`);
+	return true;
+}
+
+/**
+ * Move one bookmark to a collection ('' = Inbox clears the key). The single
+ * source of the collection write: tree drops and MoveToModal use it directly,
+ * bulk ops loop it — no forked frontmatter code.
+ */
+export async function setCollectionForPath(
+	app: App,
+	path: string,
+	collection: string
+): Promise<void> {
+	const file = app.vault.getFileByPath(path);
+	if (!file) throw new Error(`Bookmark note is missing: ${path}`);
+	await app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
+		if (collection) {
+			m['collection'] = collection;
+		} else {
+			delete m['collection'];
+		}
+	});
+}
+
+/**
+ * Set one bookmark's read/unread status. The single source of the status
+ * write: the grid's toggle computes the target and delegates here, bulk ops
+ * loop it — no forked frontmatter code.
+ */
+export async function setStatusForPath(
+	app: App,
+	path: string,
+	status: 'read' | 'unread'
+): Promise<void> {
+	const file = app.vault.getFileByPath(path);
+	if (!file) throw new Error(`Bookmark note is missing: ${path}`);
+	await app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
+		m['status'] = status;
+	});
+}
+
+/* ---------- Bulk helpers: thin loops over the single-item logic ---------- */
+
+/**
+ * Move every bookmark in `paths` to `collection` ('' = Inbox). Per-item
+ * try/catch; returns the success count. The caller emits the summary Notice.
+ */
+export async function bulkSetCollection(
+	app: App,
+	s: LinkhavenSettings,
+	store: BookmarkStore,
+	paths: string[],
+	collection: string
+): Promise<number> {
+	let updated = 0;
+	for (const path of paths) {
+		const record = store.all().find((r) => r.path === path);
+		// Already in the target: desired end-state, count as success.
+		if (record && record.collection === collection) {
+			updated++;
+			continue;
+		}
+		try {
+			await setCollectionForPath(app, path, collection);
+			updated++;
+		} catch {
+			// Per-item failure: counted by omission in the returned success count.
+		}
+	}
+	return updated;
+}
+
+/**
+ * Add one tag (canonical casing from the store) to every bookmark in `paths`.
+ * Per-item try/catch; returns the success count ("already tagged" counts —
+ * the desired end-state holds). The caller emits the summary Notice.
+ */
+export async function bulkAddTag(
+	app: App,
+	store: BookmarkStore,
+	paths: string[],
+	tag: string
+): Promise<number> {
+	let updated = 0;
+	for (const path of paths) {
+		const file = app.vault.getFileByPath(path);
+		if (!file) continue;
+		try {
+			await addTagToBookmark(app, store, file, tag, true);
+			updated++;
+		} catch {
+			// Per-item failure: counted by omission in the returned success count.
+		}
+	}
+	return updated;
+}
+
+/**
+ * Set the read/unread status of every bookmark in `paths`. Per-item
+ * try/catch; returns the success count. The caller emits the summary Notice.
+ */
+export async function bulkSetStatus(
+	app: App,
+	store: BookmarkStore,
+	paths: string[],
+	status: 'read' | 'unread'
+): Promise<number> {
+	let updated = 0;
+	for (const path of paths) {
+		const record = store.all().find((r) => r.path === path);
+		if (record && record.status === status) {
+			updated++;
+			continue;
+		}
+		try {
+			await setStatusForPath(app, path, status);
+			updated++;
+		} catch {
+			// Per-item failure: counted by omission in the returned success count.
+		}
+	}
+	return updated;
+}
+
+/**
+ * Cascade-delete every bookmark in `paths` (per-item covers/favicon/archive
+ * removal via deleteBookmarkCascade; the shared-favicon keep rule applies).
+ * Per-item try/catch; returns the success count. The caller emits the
+ * summary Notice.
+ */
+export async function bulkDeleteCascade(
+	app: App,
+	s: LinkhavenSettings,
+	store: BookmarkStore,
+	paths: string[]
+): Promise<number> {
+	let updated = 0;
+	for (const path of paths) {
+		const file = app.vault.getFileByPath(path);
+		if (!file) continue;
+		try {
+			await deleteBookmarkCascade(app, s, file, store);
+			updated++;
+		} catch {
+			// Per-item failure: counted by omission in the returned success count.
+		}
+	}
+	return updated;
 }
 
 /** Rename a tag across all bookmark notes (exact, case-sensitive match). */

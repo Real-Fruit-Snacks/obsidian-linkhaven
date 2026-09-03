@@ -1,9 +1,22 @@
-import { Debouncer, ItemView, Menu, Platform, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
+import { Debouncer, ItemView, Menu, Notice, Platform, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
 import type LinkhavenPlugin from '../main';
 import { LongPressMenu, MenuAnchor } from '../longPressMenu';
-import { BookmarkRecord, VIEW_TYPE_GRID } from '../types';
-import { AddBookmarkModal, ConfirmModal, EditTagsModal, MoveToModal, iconButton } from '../modals';
-import { deleteBookmarkCascade } from '../ops';
+import { BookmarkRecord, LH_BULK_MIME, VIEW_TYPE_GRID } from '../types';
+import {
+	AddBookmarkModal,
+	ConfirmModal,
+	EditTagsModal,
+	MoveToModal,
+	TextInputModal,
+	iconButton,
+} from '../modals';
+import {
+	bulkAddTag,
+	bulkDeleteCascade,
+	bulkSetStatus,
+	deleteBookmarkCascade,
+	setStatusForPath,
+} from '../ops';
 import { domainFromUrl } from '../utils';
 
 const CHUNK_SIZE = 60;
@@ -17,12 +30,21 @@ export class BookmarkGridView extends ItemView {
 	private labelEl: HTMLElement | null = null;
 	private searchEl: HTMLInputElement | null = null;
 	private toggleEl: HTMLElement | null = null;
+	private selectToggleEl: HTMLElement | null = null;
+	private bulkBarEl: HTMLElement | null = null;
 	private query = '';
 	private viewMode: 'grid' | 'list' = 'grid';
 	private cardMenu: LongPressMenu | null = null;
 	private shownCap = INITIAL_CAP;
 	private renderToken = 0;
 	private renderDebounced: Debouncer<[], void>;
+	/** View-local selection (note paths); never persisted, survives re-renders. */
+	private selection = new Set<string>();
+	/** Shift-click range anchor: the last plain-clicked/toggled card. */
+	private selectionAnchor: string | null = null;
+	/** Toolbar-toggled selection mode (tap-to-toggle, menus suspended). */
+	private selectionMode = false;
+	private bulkRefetching = false;
 
 	constructor(leaf: WorkspaceLeaf, plugin: LinkhavenPlugin) {
 		super(leaf);
@@ -55,6 +77,8 @@ export class BookmarkGridView extends ItemView {
 		});
 		this.registerDomEvent(this.searchEl, 'input', () => {
 			this.query = this.searchEl?.value ?? '';
+			// A search change redefines the visible set: drop the selection.
+			this.clearSelection(false);
 			this.renderDebounced();
 		});
 		const addBtn = toolbar.createEl('button', { cls: 'lh-icon-btn clickable-icon' });
@@ -75,11 +99,27 @@ export class BookmarkGridView extends ItemView {
 			if (this.toggleEl) setIcon(this.toggleEl, this.viewMode === 'grid' ? 'list' : 'layout-grid');
 			this.renderAll(false);
 		});
+		// Selection mode toggle (tap-to-toggle; the touch path to multi-select,
+		// since Ctrl/Shift-click does not exist on mobile).
+		this.selectToggleEl = toolbar.createEl('button', { cls: 'lh-icon-btn clickable-icon' });
+		this.selectToggleEl.setAttribute('aria-label', 'Select bookmarks');
+		setIcon(this.selectToggleEl, 'list-checks');
+		this.registerDomEvent(this.selectToggleEl, 'click', () => {
+			this.setSelectionMode(!this.selectionMode);
+		});
+
+		// Bulk action bar: rendered (and hidden) by renderBulkBar.
+		this.bulkBarEl = contentEl.createDiv({ cls: 'lh-bulk-bar lh-hidden' });
 
 		this.cardsEl = contentEl.createDiv({ cls: 'lh-cards' });
 		// Right-click (desktop) / long-press (mobile) context menu on cards.
-		this.cardMenu = new LongPressMenu(this, this.cardsEl, '.lh-card', (card, anchor) =>
-			this.showCardMenu(card, anchor)
+		// Suspended while selection mode is on: taps (and long-presses) toggle.
+		this.cardMenu = new LongPressMenu(
+			this,
+			this.cardsEl,
+			'.lh-card',
+			(card, anchor) => this.showCardMenu(card, anchor),
+			() => this.selectionMode
 		);
 		this.registerDomEvent(this.cardsEl, 'click', (e: MouseEvent) => void this.onCardsClick(e));
 		if (Platform.isDesktop) {
@@ -88,6 +128,12 @@ export class BookmarkGridView extends ItemView {
 				const card = (e.target as HTMLElement).closest<HTMLElement>('.lh-card');
 				const path = card?.dataset['path'];
 				if (!card || !path || !e.dataTransfer) return;
+				// Dragging a card that is IN the selection drags the whole
+				// selection: custom mime carries the JSON array of all selected
+				// paths; text/plain keeps the dragged path for backward compat.
+				if (this.selection.has(path)) {
+					e.dataTransfer.setData(LH_BULK_MIME, JSON.stringify(Array.from(this.selection)));
+				}
 				e.dataTransfer.setData('text/plain', path);
 				e.dataTransfer.effectAllowed = 'move';
 				card.addClass('lh-dragging');
@@ -113,6 +159,9 @@ export class BookmarkGridView extends ItemView {
 
 	/** Called by the plugin when the active filter changes. */
 	refresh(): void {
+		// A filter change redefines the visible set: drop the selection.
+		this.selection.clear();
+		this.selectionAnchor = null;
 		this.renderAll(true);
 	}
 
@@ -120,6 +169,8 @@ export class BookmarkGridView extends ItemView {
 	setExternalQuery(query: string): void {
 		this.query = query;
 		if (this.searchEl) this.searchEl.value = query;
+		// A search change redefines the visible set: drop the selection.
+		this.clearSelection(false);
 		this.renderDebounced();
 	}
 
@@ -131,7 +182,15 @@ export class BookmarkGridView extends ItemView {
 	private renderAll(resetCap: boolean): void {
 		if (!this.cardsEl || !this.contentEl.isConnected) return;
 		if (resetCap) this.shownCap = INITIAL_CAP;
+		// Re-renders preserve the selection; only paths whose notes are gone
+		// (e.g. after a bulk delete) are pruned.
+		const alive = new Set(this.plugin.store.all().map((r) => r.path));
+		for (const path of Array.from(this.selection)) {
+			if (!alive.has(path)) this.selection.delete(path);
+		}
+		if (this.selectionAnchor && !alive.has(this.selectionAnchor)) this.selectionAnchor = null;
 		this.renderLabel();
+		this.renderBulkBar();
 		const records = this.currentRecords();
 		this.renderCards(records);
 	}
@@ -263,6 +322,8 @@ export class BookmarkGridView extends ItemView {
 	private buildCard(record: BookmarkRecord): HTMLElement {
 		const card = createDiv({ cls: 'lh-card' });
 		card.dataset['path'] = record.path;
+		// Re-renders preserve the selection: re-apply the highlight.
+		if (this.selection.has(record.path)) card.addClass('lh-selected');
 		// No HTML5 drag and drop on touch; the Move-to modal is the touch path.
 		if (Platform.isDesktop) card.setAttribute('draggable', 'true');
 
@@ -362,9 +423,214 @@ export class BookmarkGridView extends ItemView {
 		}
 		const card = target.closest<HTMLElement>('.lh-card');
 		const path = card?.dataset['path'];
-		if (!path) return;
+		if (!card || !path) return;
+		// Selection gestures take precedence over the plain "open link" click:
+		// Ctrl/Cmd toggles, Shift range-selects from the anchor, and once the
+		// selection is non-empty (or selection mode is on) every plain click
+		// toggles too — selection mode is effectively on.
+		if (e.shiftKey && this.selectionAnchor) {
+			e.preventDefault();
+			this.selectRange(path);
+			return;
+		}
+		if (e.ctrlKey || e.metaKey || this.selectionMode || this.selection.size > 0) {
+			e.preventDefault();
+			this.toggleSelect(path);
+			return;
+		}
+		// Plain click: behaves as today (open the link) and becomes the anchor.
+		this.selectionAnchor = path;
 		const record = this.plugin.store.all().find((r) => r.path === path);
 		if (record) window.open(record.url, '_external');
+	}
+
+	/** Toggle one card in/out of the selection and make it the range anchor. */
+	private toggleSelect(path: string): void {
+		if (this.selection.has(path)) {
+			this.selection.delete(path);
+		} else {
+			this.selection.add(path);
+		}
+		this.selectionAnchor = path;
+		this.applySelectionClasses();
+		this.renderBulkBar();
+	}
+
+	/** Shift-click: add every card between the anchor and `path` (inclusive)
+	 * to the selection, in the current record order. */
+	private selectRange(path: string): void {
+		const records = this.currentRecords();
+		const anchorIndex = records.findIndex((r) => r.path === this.selectionAnchor);
+		const targetIndex = records.findIndex((r) => r.path === path);
+		if (targetIndex < 0) return;
+		if (anchorIndex < 0) {
+			// Anchor scrolled out of the visible set: fall back to a toggle.
+			this.toggleSelect(path);
+			return;
+		}
+		const lo = Math.min(anchorIndex, targetIndex);
+		const hi = Math.max(anchorIndex, targetIndex);
+		for (let i = lo; i <= hi; i++) {
+			const record = records[i];
+			if (record) this.selection.add(record.path);
+		}
+		this.applySelectionClasses();
+		this.renderBulkBar();
+	}
+
+	/** Re-apply .lh-selected to the rendered cards from the selection set. */
+	private applySelectionClasses(): void {
+		if (!this.cardsEl) return;
+		this.cardsEl.querySelectorAll<HTMLElement>('.lh-card').forEach((card) => {
+			card.toggleClass('lh-selected', this.selection.has(card.dataset['path'] ?? ''));
+		});
+	}
+
+	/** Clear the selection; the bulk Clear action also exits selection mode
+	 * (per-tap deselection down to zero does not). */
+	private clearSelection(exitMode: boolean): void {
+		this.selection.clear();
+		this.selectionAnchor = null;
+		if (exitMode && this.selectionMode) {
+			this.setSelectionMode(false);
+			return; // setSelectionMode already refreshed classes and the bar
+		}
+		this.applySelectionClasses();
+		this.renderBulkBar();
+	}
+
+	/** Toolbar-toggled selection mode (mobile tap-to-toggle). */
+	private setSelectionMode(on: boolean): void {
+		this.selectionMode = on;
+		this.selectToggleEl?.toggleClass('is-active', on);
+		if (!on) {
+			this.selection.clear();
+			this.selectionAnchor = null;
+		}
+		this.applySelectionClasses();
+		this.renderBulkBar();
+	}
+
+	/* ---------- Bulk action bar ---------- */
+
+	/** Rebuild the bulk action bar; visible only while the selection is non-empty. */
+	private renderBulkBar(): void {
+		const bar = this.bulkBarEl;
+		if (!bar) return;
+		bar.empty();
+		const count = this.selection.size;
+		bar.toggleClass('lh-hidden', count === 0);
+		if (count === 0) return;
+
+		bar.createSpan({ cls: 'lh-bulk-count', text: `${count} selected` });
+
+		const selectAll = bar.createEl('button', { text: 'Select all' });
+		selectAll.onclick = () => {
+			for (const record of this.currentRecords()) this.selection.add(record.path);
+			this.applySelectionClasses();
+			this.renderBulkBar();
+		};
+		const clear = bar.createEl('button', { text: 'Clear' });
+		clear.onclick = () => this.clearSelection(true);
+
+		const move = bar.createEl('button', { text: 'Move to…' });
+		move.onclick = () => new MoveToModal(this.app, this.plugin, Array.from(this.selection)).open();
+
+		const tag = bar.createEl('button', { text: 'Add tag…' });
+		tag.onclick = () => {
+			const paths = Array.from(this.selection);
+			new TextInputModal(this.app, {
+				title: 'Add tag',
+				placeholder: 'Tag name',
+				cta: 'Add tag',
+				validate: (value) => (value.trim().length > 0 ? null : 'Enter a tag name'),
+				onSubmit: (value) => void this.runBulkAddTag(paths, value),
+			}).open();
+		};
+
+		const refetch = bar.createEl('button', { text: 'Refetch' });
+		refetch.disabled = this.bulkRefetching;
+		refetch.onclick = () => void this.runBulkRefetch(refetch);
+
+		const markRead = bar.createEl('button', { text: 'Mark read' });
+		markRead.onclick = () => void this.runBulkSetStatus('read');
+		const markUnread = bar.createEl('button', { text: 'Mark unread' });
+		markUnread.onclick = () => void this.runBulkSetStatus('unread');
+
+		const del = bar.createEl('button', { text: 'Delete', cls: 'mod-warning' });
+		del.onclick = () => this.confirmBulkDelete();
+	}
+
+	private async runBulkAddTag(paths: string[], tag: string): Promise<void> {
+		const canonical =
+			this.plugin.store.tags().find((t) => t.toLowerCase() === tag.toLowerCase()) ?? tag;
+		const updated = await bulkAddTag(this.app, this.plugin.store, paths, canonical);
+		new Notice(
+			updated === paths.length
+				? `Tagged ${updated} bookmarks with #${canonical}`
+				: `${updated} of ${paths.length} updated`
+		);
+	}
+
+	private async runBulkRefetch(button: HTMLButtonElement): Promise<void> {
+		const paths = Array.from(this.selection);
+		if (paths.length === 0 || this.bulkRefetching) return;
+		this.bulkRefetching = true;
+		button.disabled = true;
+		try {
+			// Sequential on purpose: each refetch awaits the queue's throttle gap,
+			// so requests stay polite instead of fanning out in parallel.
+			let ok = 0;
+			for (const path of paths) {
+				const file = this.app.vault.getFileByPath(path);
+				if (!file) continue;
+				if (await this.plugin.enrichQueue.refetch(file)) ok++;
+			}
+			new Notice(
+				ok === paths.length ? `Refetched ${ok} bookmarks` : `Refetched ${ok} of ${paths.length} bookmarks`
+			);
+		} finally {
+			this.bulkRefetching = false;
+			button.disabled = false;
+		}
+	}
+
+	private async runBulkSetStatus(status: 'read' | 'unread'): Promise<void> {
+		const paths = Array.from(this.selection);
+		if (paths.length === 0) return;
+		const updated = await bulkSetStatus(this.app, this.plugin.store, paths, status);
+		new Notice(
+			updated === paths.length
+				? `Marked ${updated} bookmarks as ${status}`
+				: `${updated} of ${paths.length} updated`
+		);
+	}
+
+	private confirmBulkDelete(): void {
+		const paths = Array.from(this.selection);
+		if (paths.length === 0) return;
+		new ConfirmModal(
+			this.app,
+			`Delete ${paths.length} bookmarks? Their covers, favicons, and archive copies will also be removed.`,
+			() => void this.runBulkDelete(paths),
+			{ confirmText: 'Delete', destructive: true }
+		).open();
+	}
+
+	private async runBulkDelete(paths: string[]): Promise<void> {
+		const updated = await bulkDeleteCascade(
+			this.app,
+			this.plugin.settings,
+			this.plugin.store,
+			paths
+		);
+		// Deleted notes leave the vault: the selection no longer applies.
+		this.clearSelection(true);
+		new Notice(
+			updated === paths.length
+				? `Deleted ${updated} bookmarks and their files`
+				: `${updated} of ${paths.length} updated`
+		);
 	}
 
 	/**
@@ -397,6 +663,12 @@ export class BookmarkGridView extends ItemView {
 					.onClick(() => void this.handleAction('open-readable', path))
 			);
 		}
+		menu.addItem((item) =>
+			item
+				.setTitle('Refetch page')
+				.setIcon('rotate-cw')
+				.onClick(() => void this.handleAction('refetch', path))
+		);
 		menu.addSeparator();
 		menu.addItem((item) =>
 			item
@@ -450,11 +722,16 @@ export class BookmarkGridView extends ItemView {
 				if (readableFile) await this.app.workspace.getLeaf('tab').openFile(readableFile);
 				break;
 			}
-			case 'toggle-read':
-				await this.app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
-					m['status'] = m['status'] === 'read' ? 'unread' : 'read';
-				});
+			case 'refetch':
+				// Existing Notices ("Refreshed {title}" / "Refetch failed") cover feedback.
+				await this.plugin.enrichQueue.refetch(file);
 				break;
+			case 'toggle-read': {
+				// Same single-item write the bulk status op loops over.
+				const current = this.plugin.store.all().find((r) => r.path === path)?.status;
+				await setStatusForPath(this.app, path, current === 'read' ? 'unread' : 'read');
+				break;
+			}
 			case 'toggle-pin':
 				await this.app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
 					m['pinned'] = m['pinned'] !== true;
@@ -466,7 +743,7 @@ export class BookmarkGridView extends ItemView {
 				break;
 			}
 			case 'move':
-				new MoveToModal(this.app, this.plugin, file).open();
+				new MoveToModal(this.app, this.plugin, [path]).open();
 				break;
 			case 'trash': {
 				const record = this.plugin.store.all().find((r) => r.path === path);

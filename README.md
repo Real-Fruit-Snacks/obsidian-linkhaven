@@ -35,10 +35,16 @@ or Node APIs, so nothing is "desktop only".
 - **Manage collections and tags** (rename, delete, merge-safe moves) from the tree.
 - **Collection icons** — pick a Lucide icon per collection from the tree's context menu.
 - **Drag cards onto collections** to file them, or onto a tag to add it (desktop).
+- **Bulk select + actions** — Ctrl/Cmd-click and Shift-click (or the selection-mode
+  toggle on mobile) select multiple cards; a bulk bar offers Move to…, Add tag…,
+  Mark read/unread and Delete, and dragging a selected card drops the whole
+  selection onto a collection, Inbox, or tag.
 - **Linkwarden import** — collections, tags, dates and pinned links map across; existing
   URLs are skipped.
 - **Cascade delete** — deleting a bookmark also removes its cover, favicon, and archive
   copy (only files inside the plugin's covers/archive folders are touched).
+- **Refetch page** — a card's context menu (or the bulk bar) can refetch page metadata
+  and re-download a missing or stale cover.
 - **Local-first** — plain Markdown files, no account, no telemetry.
 
 ## Install

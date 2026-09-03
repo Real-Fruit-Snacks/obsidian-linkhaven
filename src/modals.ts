@@ -14,6 +14,7 @@ import {
 import { createBookmarkNote } from './enrich';
 import { importLinkwarden } from './importer';
 import type LinkhavenPlugin from './main';
+import { bulkSetCollection, setCollectionForPath } from './ops';
 import type { BookmarkStore } from './store';
 import { sanitizeCollectionPart } from './utils';
 
@@ -552,23 +553,30 @@ export class AddBookmarkModal extends Modal {
 	}
 }
 
+/**
+ * Move one or more bookmark notes to a collection. With a single path this is
+ * the classic per-card flow (dropdown preset to the note's collection); with
+ * several paths (bulk bar) the choice is applied to all via bulkSetCollection.
+ */
 export class MoveToModal extends Modal {
 	private plugin: LinkhavenPlugin;
-	private file: TFile;
+	private paths: string[];
 	private helper = new Component();
 	private selection = '';
 
-	constructor(app: App, plugin: LinkhavenPlugin, file: TFile) {
+	constructor(app: App, plugin: LinkhavenPlugin, paths: string[]) {
 		super(app);
 		this.plugin = plugin;
-		this.file = file;
+		this.paths = paths;
 	}
 
 	onOpen(): void {
 		this.helper.load();
 		const { contentEl } = this;
 		contentEl.addClass('lh-modal');
-		contentEl.createEl('h2', { text: 'Move to collection' });
+		contentEl.createEl('h2', {
+			text: this.paths.length > 1 ? `Move ${this.paths.length} bookmarks` : 'Move to collection',
+		});
 
 		const collections = this.plugin.store.collections();
 		let textWrap: HTMLElement | null = null;
@@ -576,9 +584,10 @@ export class MoveToModal extends Modal {
 			drop.addOption('', 'Inbox');
 			for (const c of collections) drop.addOption(c, c);
 			drop.addOption('__new__', 'New…');
-			const record = this.plugin.store
-				.all()
-				.find((r) => r.path === this.file.path);
+			const record =
+				this.paths.length === 1
+					? this.plugin.store.all().find((r) => r.path === this.paths[0])
+					: undefined;
 			if (record) drop.setValue(record.collection);
 			this.selection = record?.collection ?? '';
 			drop.onChange((value) => {
@@ -615,15 +624,31 @@ export class MoveToModal extends Modal {
 
 	private async apply(): Promise<void> {
 		const target = this.selection;
-		await this.app.fileManager.processFrontMatter(this.file, (m: Record<string, unknown>) => {
-			if (target) {
-				m['collection'] = target;
-			} else {
-				delete m['collection'];
-			}
-		});
-		new Notice(target ? `Moved to ${target}` : 'Moved to Inbox');
 		this.close();
+		if (this.paths.length <= 1) {
+			// Single bookmark: the same collection write as the tree drop.
+			const file = this.app.vault.getFileByPath(this.paths[0] ?? '');
+			if (!file) return;
+			await setCollectionForPath(this.app, file.path, target);
+			new Notice(target ? `Moved to ${target}` : 'Moved to Inbox');
+			return;
+		}
+		const updated = await bulkSetCollection(
+			this.app,
+			this.plugin.settings,
+			this.plugin.store,
+			this.paths,
+			target
+		);
+		if (updated === this.paths.length) {
+			new Notice(
+				target
+					? `Moved ${updated} bookmarks to ${target}`
+					: `Moved ${updated} bookmarks to Inbox`
+			);
+		} else {
+			new Notice(`${updated} of ${this.paths.length} updated`);
+		}
 	}
 
 	onClose(): void {

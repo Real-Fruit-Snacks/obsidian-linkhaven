@@ -4,14 +4,17 @@ import { ConfirmModal, IconPickerModal, TextInputModal, iconButton } from '../mo
 import {
 	addCollection,
 	addTagToBookmark,
+	bulkAddTag,
+	bulkSetCollection,
 	deleteCollection,
 	removeTag,
 	renameCollection,
 	renameTag,
+	setCollectionForPath,
 } from '../ops';
 import { LongPressMenu } from '../longPressMenu';
-import { Filter, SmartId, VIEW_TYPE_TREE } from '../types';
-import { sanitizeCollectionPart } from '../utils';
+import { Filter, LH_BULK_MIME, SmartId, VIEW_TYPE_TREE } from '../types';
+import { parseBulkDragPayload, sanitizeCollectionPart } from '../utils';
 
 interface TreeNode {
 	name: string;
@@ -96,8 +99,16 @@ export class CollectionTreeView extends ItemView {
 				'[data-lh-drop], [data-lh-drop-tag]'
 			);
 			// Only offer the drop affordance for in-app drags (note paths), so
-			// OS file drags don't light up rows they can't use.
-			if (!row || !e.dataTransfer || !e.dataTransfer.types.includes('text/plain')) return;
+			// OS file drags don't light up rows they can't use. Either the
+			// single-card payload (text/plain) or the bulk-selection payload
+			// (custom mime, JSON array of paths) qualifies.
+			if (
+				!row ||
+				!e.dataTransfer ||
+				(!e.dataTransfer.types.includes('text/plain') &&
+					!e.dataTransfer.types.includes(LH_BULK_MIME))
+			)
+				return;
 			e.preventDefault();
 			e.dataTransfer.dropEffect = 'move';
 			this.clearDropTargets(row);
@@ -123,12 +134,16 @@ export class CollectionTreeView extends ItemView {
 			if (!row || !e.dataTransfer) return;
 			e.preventDefault();
 			row.removeClass('lh-drop-target');
+			// Bulk drags carry the JSON array in the custom mime type; the
+			// single-card payload (text/plain) is the fallback / classic path.
+			const bulkPaths = parseBulkDragPayload(e.dataTransfer.getData(LH_BULK_MIME));
 			const notePath = e.dataTransfer.getData('text/plain');
+			const paths = bulkPaths.length > 0 ? bulkPaths : notePath ? [notePath] : [];
 			const tag = row.dataset['lhDropTag'];
 			if (tag !== undefined) {
-				void this.handleTagDrop(tag, notePath);
+				void this.handleTagDrop(tag, paths);
 			} else {
-				void this.handleDrop(row.dataset['lhDrop'] ?? '', notePath);
+				void this.handleDrop(row.dataset['lhDrop'] ?? '', paths);
 			}
 		});
 
@@ -576,27 +591,51 @@ export class CollectionTreeView extends ItemView {
 
 	/* ---------- Drag-and-drop filing ---------- */
 
-	private async handleDrop(collection: string, notePath: string): Promise<void> {
-		if (!notePath) return;
-		const file = this.app.vault.getFileByPath(notePath);
-		const record = this.plugin.store.all().find((r) => r.path === notePath);
-		if (!file || !record || record.collection === collection) return;
-		await this.app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
-			if (collection) {
-				m['collection'] = collection;
-			} else {
-				delete m['collection'];
-			}
-		});
-		new Notice(collection ? `Moved to ${collection}` : 'Moved to Inbox');
+	private async handleDrop(collection: string, paths: string[]): Promise<void> {
+		if (paths.length === 0) return;
+		if (paths.length === 1) {
+			// Single-card drop: unchanged v0.2.0 behavior.
+			const notePath = paths[0] ?? '';
+			const file = this.app.vault.getFileByPath(notePath);
+			const record = this.plugin.store.all().find((r) => r.path === notePath);
+			if (!file || !record || record.collection === collection) return;
+			await setCollectionForPath(this.app, notePath, collection);
+			new Notice(collection ? `Moved to ${collection}` : 'Moved to Inbox');
+			return;
+		}
+		// Bulk drop: apply to all via the bulk op; one summary Notice.
+		const updated = await bulkSetCollection(
+			this.app,
+			this.plugin.settings,
+			this.plugin.store,
+			paths,
+			collection
+		);
+		const name = collection || 'Inbox';
+		new Notice(
+			updated === paths.length
+				? `Moved ${updated} bookmarks to ${name}`
+				: `${updated} of ${paths.length} updated`
+		);
 	}
 
-	/** Drop target: a tag row. Adds the tag to the dragged bookmark. */
-	private async handleTagDrop(tag: string, notePath: string): Promise<void> {
-		if (!notePath || !tag) return;
-		const file = this.app.vault.getFileByPath(notePath);
-		if (!file) return;
-		await addTagToBookmark(this.app, this.plugin.store, file, tag);
+	/** Drop target: a tag row. Adds the tag to the dragged bookmark(s). */
+	private async handleTagDrop(tag: string, paths: string[]): Promise<void> {
+		if (!tag || paths.length === 0) return;
+		if (paths.length === 1) {
+			// Single-card drop: unchanged v0.2.7 behavior.
+			const file = this.app.vault.getFileByPath(paths[0] ?? '');
+			if (!file) return;
+			await addTagToBookmark(this.app, this.plugin.store, file, tag);
+			return;
+		}
+		// Bulk drop: apply to all via the bulk op; one summary Notice.
+		const updated = await bulkAddTag(this.app, this.plugin.store, paths, tag);
+		new Notice(
+			updated === paths.length
+				? `Tagged ${updated} bookmarks with #${tag}`
+				: `${updated} of ${paths.length} updated`
+		);
 	}
 }
 
