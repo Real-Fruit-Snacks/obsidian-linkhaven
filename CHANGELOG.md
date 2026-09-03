@@ -4,6 +4,13 @@ All notable changes to Linkhaven are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-09-03
+
+### Changed
+- Release assets (main.js, manifest.json, styles.css) now carry SLSA build-provenance
+  attestations — verify a download was built from this repository with
+  `gh attestation verify main.js --repo Real-Fruit-Snacks/obsidian-linkhaven`.
+
 ## [1.2.1] - 2026-09-03
 
 ### Added
