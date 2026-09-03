@@ -21,6 +21,30 @@ const MOBILE_SAVE_PLACEHOLDER = 'PASTE_OR_SHORTCUT_INPUT';
 const MOBILE_SAVE_DESC =
 	'Copy an obsidian:// link you can use from a share-sheet shortcut on your phone.';
 
+const WAYBACK_IGNORED_PLACEHOLDER = 'example.com\n*.internal.example.org';
+
+/**
+ * Split textarea input on newlines/commas and normalize each domain:
+ * lowercase, drop any scheme/path, strip wildcard ("*."), leading-dot, and
+ * "www." prefixes. Kept in sync with normalizeIgnoredEntry in wayback.ts so
+ * stored values match the matcher exactly.
+ */
+function parseIgnoredDomains(raw: string): string[] {
+	const out: string[] = [];
+	for (const part of raw.split(/[\n,]+/)) {
+		let domain = part.trim().toLowerCase();
+		const schemeAt = domain.indexOf('://');
+		if (schemeAt >= 0) domain = domain.slice(schemeAt + 3);
+		const slashAt = domain.indexOf('/');
+		if (slashAt >= 0) domain = domain.slice(0, slashAt);
+		while (domain.startsWith('*.')) domain = domain.slice(2);
+		while (domain.startsWith('.')) domain = domain.slice(1);
+		if (domain.startsWith('www.')) domain = domain.slice(4);
+		if (domain && !out.includes(domain)) out.push(domain);
+	}
+	return out;
+}
+
 export interface LinkhavenSettings {
 	// knownCollections: user-created (possibly empty) collections; the store
 	// reports union(collections derived from notes, knownCollections).
@@ -32,6 +56,8 @@ export interface LinkhavenSettings {
 	renameNotesToTitle: boolean;
 	gridSort: GridSort;
 	markReadOnOpen: boolean;
+	autoWayback: boolean;
+	waybackIgnoredDomains: string[];
 	collapsedNodes: string[];
 	lastFilter: Filter | null;
 	knownCollections: string[];
@@ -49,6 +75,8 @@ export const DEFAULT_SETTINGS: LinkhavenSettings = {
 	renameNotesToTitle: true,
 	gridSort: 'newest',
 	markReadOnOpen: false,
+	autoWayback: false,
+	waybackIgnoredDomains: [],
 	collapsedNodes: [],
 	lastFilter: null,
 	knownCollections: [],
@@ -144,6 +172,26 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 				},
 			},
 			{
+				name: 'Archive saved links to the Wayback Machine',
+				desc: 'Submit each saved link to the Wayback Machine after enrichment. Captures are public and visible to anyone.',
+				control: {
+					type: 'toggle',
+					key: 'autoWayback',
+					defaultValue: DEFAULT_SETTINGS.autoWayback,
+				},
+			},
+			{
+				name: 'Wayback ignored domains',
+				desc: 'Never archive links on these domains; subdomains are covered too. One per line or comma-separated.',
+				control: {
+					type: 'textarea',
+					key: 'waybackIgnoredDomains',
+					placeholder: WAYBACK_IGNORED_PLACEHOLDER,
+					defaultValue: DEFAULT_SETTINGS.waybackIgnoredDomains.join('\n'),
+					rows: 4,
+				},
+			},
+			{
 				name: 'Mobile save link',
 				desc: MOBILE_SAVE_DESC,
 				action: () => void this.copyMobileSaveLink(),
@@ -188,6 +236,16 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 				return;
 			case 'markReadOnOpen':
 				s.markReadOnOpen = value === true;
+				await this.plugin.saveSettings();
+				return;
+			case 'autoWayback':
+				s.autoWayback = value === true;
+				await this.plugin.saveSettings();
+				return;
+			case 'waybackIgnoredDomains':
+				s.waybackIgnoredDomains = parseIgnoredDomains(
+					Array.isArray(value) ? value.join('\n') : String(value)
+				);
 				await this.plugin.saveSettings();
 				return;
 		}
@@ -281,6 +339,31 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 				toggle.setValue(this.plugin.settings.markReadOnOpen).onChange(async (value) => {
 					await this.setControlValue('markReadOnOpen', value);
 				})
+			);
+
+		new Setting(containerEl)
+			.setName('Archive saved links to the Wayback Machine')
+			.setDesc(
+				'Submit each saved link to the Wayback Machine after enrichment. Captures are public and visible to anyone.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.autoWayback).onChange(async (value) => {
+					await this.setControlValue('autoWayback', value);
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Wayback ignored domains')
+			.setDesc(
+				'Never archive links on these domains; subdomains are covered too. One per line or comma-separated.'
+			)
+			.addTextArea((area) =>
+				area
+					.setPlaceholder(WAYBACK_IGNORED_PLACEHOLDER)
+					.setValue(this.plugin.settings.waybackIgnoredDomains.join('\n'))
+					.onChange(async (value) => {
+						await this.setControlValue('waybackIgnoredDomains', value);
+					})
 			);
 
 		let linkField: TextComponent | null = null;

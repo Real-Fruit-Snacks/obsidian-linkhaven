@@ -1,6 +1,8 @@
 import { App, Notice, TFile, normalizePath, requestUrl } from 'obsidian';
 import { pathInsideFolder, trashManagedFile } from './ops';
 import { ReadableResult, extractReadableMarkdown } from './readable';
+import { archiveUrlToWayback, isIgnoredDomain } from './wayback';
+import type { WaybackResult } from './wayback';
 import type { LinkhavenSettings } from './settings';
 import type { BookmarkStore } from './store';
 import type { NewBookmarkInput } from './types';
@@ -17,6 +19,8 @@ import {
 
 const REQUEST_GAP_MS = 250;
 const CONCURRENCY = 2;
+/** Upper bound on Wayback SPN job polling inside a queue job. */
+const WAYBACK_MAX_WAIT_SECONDS = 90;
 
 function yamlScalar(value: string): string {
 	// JSON string syntax is a valid YAML double-quoted scalar.
@@ -381,60 +385,112 @@ export class EnrichQueue {
 		const titleIsAuto =
 			currentTitle.length === 0 || currentTitle === url || currentTitle === domainFromUrl(url);
 		const wantReadable = s.captureReadable && !fm?.['readable'];
-		if (hasCover && hasFavicon && !titleIsAuto && !wantReadable) return;
+		const wantWayback =
+			s.autoWayback && !fm?.['wayback'] && !isIgnoredDomain(url, s.waybackIgnoredDomains);
+		if (hasCover && hasFavicon && !titleIsAuto && !wantReadable && !wantWayback) return;
 
-		const res = await requestUrl({ url, throw: false });
-		if (res.status >= 400) throw new Error(`HTTP ${res.status} for ${url}`);
-		const doc = new DOMParser().parseFromString(res.text, 'text/html');
-		const meta = extractMeta(doc, url);
+		// Skip the page fetch when only the Wayback capture is still pending.
+		const needPage = !hasCover || !hasFavicon || titleIsAuto || wantReadable;
+		if (needPage) {
+			const res = await requestUrl({ url, throw: false });
+			if (res.status >= 400) throw new Error(`HTTP ${res.status} for ${url}`);
+			const doc = new DOMParser().parseFromString(res.text, 'text/html');
+			const meta = extractMeta(doc, url);
 
-		const oldCover = typeof fm?.['cover'] === 'string' ? fm['cover'] : '';
-		const oldFavicon = typeof fm?.['favicon'] === 'string' ? fm['favicon'] : '';
-		const oldReadable = typeof fm?.['readable'] === 'string' ? fm['readable'] : '';
+			const oldCover = typeof fm?.['cover'] === 'string' ? fm['cover'] : '';
+			const oldFavicon = typeof fm?.['favicon'] === 'string' ? fm['favicon'] : '';
+			const oldReadable = typeof fm?.['readable'] === 'string' ? fm['readable'] : '';
 
-		let coverPath: string | undefined;
-		if (meta.image && !hasCover) {
-			coverPath = await this.downloadAsset(meta.image, s.coversFolder, `${file.basename}-cover`);
-		}
-		let faviconPath: string | undefined;
-		if (meta.icon && !hasFavicon) {
-			faviconPath = await this.ensureDomainFavicon(meta.icon, url, s);
-		}
+			let coverPath: string | undefined;
+			if (meta.image && !hasCover) {
+				coverPath = await this.downloadAsset(meta.image, s.coversFolder, `${file.basename}-cover`);
+			}
+			let faviconPath: string | undefined;
+			if (meta.icon && !hasFavicon) {
+				faviconPath = await this.ensureDomainFavicon(meta.icon, url, s);
+			}
 
-		let nextCover = coverPath ?? (oldCover || undefined);
-		let nextFavicon = faviconPath ?? (oldFavicon || undefined);
-		let nextReadable = oldReadable || undefined;
+			let nextCover = coverPath ?? (oldCover || undefined);
+			let nextFavicon = faviconPath ?? (oldFavicon || undefined);
+			let nextReadable = oldReadable || undefined;
 
-		// Rename notes that still carry an auto-derived domain file name
-		// (`domain` or `domain-N`) to the fetched page title. Web Clipper notes
-		// have real titles, so titleIsAuto is false and they stay untouched.
-		const domain = domainFromUrl(url);
-		const basenameIsAuto =
-			domain.length > 0 &&
-			(file.basename === domain ||
-				(file.basename.startsWith(`${domain}-`) &&
-					/^\d+$/.test(file.basename.slice(domain.length + 1))));
-		if (s.renameNotesToTitle && titleIsAuto && basenameIsAuto && meta.title.trim().length > 0) {
-			const renamed = await this.renameNoteToTitle(file, meta.title, s, {
-				cover: nextCover,
-				favicon: nextFavicon,
-				readable: nextReadable,
+			// Rename notes that still carry an auto-derived domain file name
+			// (`domain` or `domain-N`) to the fetched page title. Web Clipper notes
+			// have real titles, so titleIsAuto is false and they stay untouched.
+			const domain = domainFromUrl(url);
+			const basenameIsAuto =
+				domain.length > 0 &&
+				(file.basename === domain ||
+					(file.basename.startsWith(`${domain}-`) &&
+						/^\d+$/.test(file.basename.slice(domain.length + 1))));
+			if (s.renameNotesToTitle && titleIsAuto && basenameIsAuto && meta.title.trim().length > 0) {
+				const renamed = await this.renameNoteToTitle(file, meta.title, s, {
+					cover: nextCover,
+					favicon: nextFavicon,
+					readable: nextReadable,
+				});
+				nextCover = renamed.cover;
+				nextFavicon = renamed.favicon;
+				nextReadable = renamed.readable;
+			}
+
+			await this.app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
+				if (meta.title && titleIsAuto) m['title'] = meta.title;
+				if (meta.description && !m['description']) m['description'] = meta.description;
+				if (nextCover && nextCover !== oldCover) m['cover'] = nextCover;
+				if (nextFavicon && nextFavicon !== oldFavicon) m['favicon'] = nextFavicon;
+				if (nextReadable && nextReadable !== oldReadable) m['readable'] = nextReadable;
 			});
-			nextCover = renamed.cover;
-			nextFavicon = renamed.favicon;
-			nextReadable = renamed.readable;
+
+			if (wantReadable) {
+				await this.captureReadable(file, res.text, url, s);
+			}
 		}
 
-		await this.app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
-			if (meta.title && titleIsAuto) m['title'] = meta.title;
-			if (meta.description && !m['description']) m['description'] = meta.description;
-			if (nextCover && nextCover !== oldCover) m['cover'] = nextCover;
-			if (nextFavicon && nextFavicon !== oldFavicon) m['favicon'] = nextFavicon;
-			if (nextReadable && nextReadable !== oldReadable) m['readable'] = nextReadable;
-		});
+		if (wantWayback) {
+			const result = await this.archiveToWayback(file);
+			if (!result.archivedUrl) {
+				// Soft fail: warn only, no queue failure. fm.wayback stays unset,
+				// so the guard above keeps the job eligible and a later
+				// enrichment trigger retries the capture.
+				console.warn(
+					'Linkhaven: Wayback capture failed for',
+					url,
+					result.error ?? 'unknown error'
+				);
+			}
+		}
+	}
 
-		if (wantReadable) {
-			await this.captureReadable(file, res.text, url, s);
+	/**
+	 * Shared Wayback capture path (auto-enrichment, card menu, bulk bar):
+	 * skips notes that already carry fm.wayback or sit on an ignored domain,
+	 * captures through archiveUrlToWayback with this queue's throttle, and
+	 * writes fm.wayback on success only. Never throws; the caller decides how
+	 * to surface the outcome.
+	 */
+	async archiveToWayback(file: TFile): Promise<WaybackResult> {
+		try {
+			const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+			const url = typeof fm?.['url'] === 'string' ? fm['url'] : '';
+			if (!url) return { error: 'Note has no URL' };
+			const existing = typeof fm?.['wayback'] === 'string' ? fm['wayback'] : '';
+			if (existing) return { archivedUrl: existing };
+			const s = this.getSettings();
+			if (isIgnoredDomain(url, s.waybackIgnoredDomains)) {
+				return { error: 'Domain is on the Wayback ignored list' };
+			}
+			const result = await archiveUrlToWayback(url, WAYBACK_MAX_WAIT_SECONDS, () =>
+				this.throttle()
+			);
+			if (!result.archivedUrl) return result;
+			const archivedUrl = result.archivedUrl;
+			await this.app.fileManager.processFrontMatter(file, (m: Record<string, unknown>) => {
+				m['wayback'] = archivedUrl;
+			});
+			return { archivedUrl };
+		} catch (e) {
+			return { error: e instanceof Error ? e.message : String(e) };
 		}
 	}
 
@@ -497,6 +553,19 @@ export class EnrichQueue {
 
 			if (s.captureReadable) {
 				await this.refreshReadable(file, res.text, url, s);
+			}
+
+			// Wayback: never re-archive a note that already has fm.wayback
+			// (avoids duplicate captures); only fill a missing capture when
+			// auto-archiving is on. Soft fail — never flips refetch to failed.
+			if (s.autoWayback && !fm?.['wayback']) {
+				const waybackResult = await this.archiveToWayback(file);
+				if (!waybackResult.archivedUrl) {
+					console.warn(
+						'Linkhaven: Wayback capture failed during refetch',
+						waybackResult.error ?? 'unknown error'
+					);
+				}
 			}
 
 			this.failed.delete(file.path);

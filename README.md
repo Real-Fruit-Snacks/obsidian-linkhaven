@@ -48,6 +48,12 @@ or Node APIs, so nothing is "desktop only".
   copy (only files inside the plugin's covers/archive folders are touched).
 - **Refetch page** — a card's context menu (or the bulk bar) can refetch page metadata
   and re-download a missing or stale cover.
+- **Wayback Machine integration** — optionally auto-archive every saved link to the
+  Internet Archive (anonymous Save Page Now; off by default). The card context menu
+  offers **Open archived version** and **Save to Wayback Machine**, and the bulk bar
+  can archive a whole selection. Snapshots are stored in the note's `wayback:`
+  frontmatter; an ignored-domains list keeps private URLs out of the archive.
+  Captures are anonymous — authenticated captures may come later if rate limits bite.
 - **Local-first** — plain Markdown files, no account, no telemetry.
 
 ## Install
@@ -164,6 +170,8 @@ artifacts stay behind.
 | Rename notes to page title | on | Rename domain-named notes to the fetched page title after enrichment |
 | Grid sort | Newest first | Order of bookmarks in the grid: newest, oldest, title, or domain |
 | Mark as read on open | off | Silently mark a bookmark as read when its link or readable copy is opened |
+| Archive saved links to the Wayback Machine | off | Submit each saved link to the Wayback Machine after enrichment; captures are public |
+| Wayback ignored domains | — | Domains (subdomains included) that are never archived; one per line or comma-separated |
 | Mobile save link | — | Copy an `obsidian://` save link for share-sheet shortcuts on your phone |
 
 Tree collapse state and the last grid filter are persisted automatically.
@@ -182,13 +190,20 @@ cover: Bookmarks/covers/example-cover.png
 favicon: Bookmarks/covers/favicons/example.com.png   # shared per domain
 readable: Bookmarks/archives/example.md
 description: Optional summary
+wayback: https://web.archive.org/web/20260101000000/https://example.com   # Wayback snapshot (optional)
 ```
 
 ## Network use disclosure
 
 When a bookmark is enriched, the plugin fetches the saved page itself (to read its title,
 description, and Open Graph metadata) and the page's `og:image` and favicon **from their
-origins only**. All requests go through Obsidian's `requestUrl` API. There are no
+origins only**. All requests go through Obsidian's `requestUrl` API.
+
+**Wayback Machine:** with the "Archive saved links" setting enabled — or when you use the
+manual or bulk Wayback actions — the saved URLs are sent to the Internet Archive
+(`web.archive.org` / `archive.org`) so a snapshot can be taken, and those captures are
+**public**. Domains on the "Wayback ignored domains" list are never sent. No account or
+API keys are used; captures are anonymous. Apart from the Wayback Machine, there are no
 third-party services, proxies, or CDNs involved.
 
 ## Privacy

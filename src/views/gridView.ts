@@ -28,6 +28,7 @@ import {
 	setStatusForPath,
 } from '../ops';
 import { domainFromUrl, sortRecords } from '../utils';
+import { isIgnoredDomain, waybackLookupUrl } from '../wayback';
 
 const CHUNK_SIZE = 60;
 const INITIAL_CAP = 300;
@@ -55,6 +56,7 @@ export class BookmarkGridView extends ItemView {
 	/** Toolbar-toggled selection mode (tap-to-toggle, menus suspended). */
 	private selectionMode = false;
 	private bulkRefetching = false;
+	private bulkWaybacking = false;
 
 	constructor(leaf: WorkspaceLeaf, plugin: LinkhavenPlugin) {
 		super(leaf);
@@ -496,6 +498,22 @@ export class BookmarkGridView extends ItemView {
 		}
 	}
 
+	/**
+	 * Manual "Save to Wayback Machine" capture via the queue path (same
+	 * throttle and fm.wayback write as auto-archiving); Notices per step.
+	 */
+	private async saveToWayback(path: string): Promise<void> {
+		const file = this.app.vault.getFileByPath(path);
+		if (!file) return;
+		new Notice('Archiving…');
+		const result = await this.plugin.enrichQueue.archiveToWayback(file);
+		if (result.archivedUrl) {
+			new Notice('Archived to Wayback');
+		} else {
+			new Notice(`Wayback capture failed: ${result.error ?? 'unknown error'}`);
+		}
+	}
+
 	private async copyLink(url: string): Promise<void> {
 		try {
 			await navigator.clipboard.writeText(url);
@@ -613,6 +631,10 @@ export class BookmarkGridView extends ItemView {
 		refetch.disabled = this.bulkRefetching;
 		refetch.onclick = () => void this.runBulkRefetch(refetch);
 
+		const wayback = bar.createEl('button', { text: 'Wayback' });
+		wayback.disabled = this.bulkWaybacking;
+		wayback.onclick = () => void this.runBulkWayback(wayback);
+
 		const markRead = bar.createEl('button', { text: 'Mark read' });
 		markRead.onclick = () => void this.runBulkSetStatus('read');
 		const markUnread = bar.createEl('button', { text: 'Mark unread' });
@@ -652,6 +674,44 @@ export class BookmarkGridView extends ItemView {
 			);
 		} finally {
 			this.bulkRefetching = false;
+			button.disabled = false;
+		}
+	}
+
+	private async runBulkWayback(button: HTMLButtonElement): Promise<void> {
+		if (this.bulkWaybacking) return;
+		// Skip bookmarks already captured or on an ignored domain.
+		const candidates = Array.from(this.selection)
+			.map((path) => this.plugin.store.all().find((r) => r.path === path))
+			.filter(
+				(r): r is BookmarkRecord =>
+					!!r &&
+					!r.wayback &&
+					!isIgnoredDomain(r.url, this.plugin.settings.waybackIgnoredDomains)
+			);
+		if (candidates.length === 0) {
+			new Notice('Nothing to archive — already captured or ignored');
+			return;
+		}
+		this.bulkWaybacking = true;
+		button.disabled = true;
+		try {
+			// Sequential on purpose: each capture awaits the queue's throttle gap,
+			// so requests stay polite instead of fanning out in parallel.
+			let ok = 0;
+			for (const record of candidates) {
+				const file = this.app.vault.getFileByPath(record.path);
+				if (!file) continue;
+				const result = await this.plugin.enrichQueue.archiveToWayback(file);
+				if (result.archivedUrl) ok++;
+			}
+			new Notice(
+				ok === candidates.length
+					? `Archived ${ok} bookmarks to Wayback`
+					: `Archived ${ok} of ${candidates.length} bookmarks to Wayback`
+			);
+		} finally {
+			this.bulkWaybacking = false;
 			button.disabled = false;
 		}
 	}
@@ -710,6 +770,23 @@ export class BookmarkGridView extends ItemView {
 				.setIcon('external-link')
 				.onClick(() => this.openExternalLink(record))
 		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Open archived version')
+				.setIcon('archive')
+				.onClick(() => {
+					window.open(record.wayback ?? waybackLookupUrl(record.url), '_external');
+					void this.markReadOnOpen(path);
+				})
+		);
+		if (!record.wayback) {
+			menu.addItem((item) =>
+				item
+					.setTitle('Save to Wayback Machine')
+					.setIcon('archive')
+					.onClick(() => void this.saveToWayback(path))
+			);
+		}
 		menu.addItem((item) =>
 			item
 				.setTitle('Copy link')

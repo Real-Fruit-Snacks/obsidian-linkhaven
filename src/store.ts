@@ -189,6 +189,8 @@ export class BookmarkStore extends Component {
 		if (readable) record.readable = readable;
 		const description = asString(fm['description']);
 		if (description) record.description = description;
+		const wayback = asString(fm['wayback']);
+		if (wayback) record.wayback = wayback;
 		return record;
 	}
 

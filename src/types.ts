@@ -22,6 +22,7 @@ export interface BookmarkRecord {
 	favicon?: string;
 	readable?: string;
 	description?: string;
+	wayback?: string;
 }
 
 export const VIEW_TYPE_TREE = 'linkhaven-tree';

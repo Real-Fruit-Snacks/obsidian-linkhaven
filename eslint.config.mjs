@@ -13,9 +13,13 @@ export default defineConfig([
       },
     },
     rules: {
-      // "Linkwarden" is a third-party brand name (see SPEC.md); "Obsidian"
-      // is kept from the rule's defaults since a custom brands list replaces them.
-      "obsidianmd/ui/sentence-case": ["warn", { brands: ["Obsidian", "Linkwarden"] }],
+      // "Linkwarden" and the Wayback Machine are third-party brand names (see
+      // SPEC.md / SPEC-v150.md); "Obsidian" is kept from the rule's defaults
+      // since a custom brands list replaces them.
+      "obsidianmd/ui/sentence-case": [
+        "warn",
+        { brands: ["Obsidian", "Linkwarden", "Wayback", "Wayback Machine", "Internet Archive"] },
+      ],
     },
   },
   {

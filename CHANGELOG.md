@@ -4,6 +4,25 @@ All notable changes to Linkhaven are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-09-03
+
+### Added
+- Wayback Machine integration: a new "Archive saved links to the Wayback Machine"
+  setting (off by default) submits every saved link to the Internet Archive after
+  enrichment — anonymously, through the queue's polite rate limiter, with SPN job
+  polling, a freshness check, one session-limit retry, and an availability/CDX
+  fallback to the latest existing snapshot. The snapshot URL is stored in the
+  note's `wayback:` frontmatter; failures warn in the console only and are
+  retried on later enrichment triggers.
+- "Wayback ignored domains" setting: links on these domains (subdomains included)
+  are never sent to the Wayback Machine — on the auto path, the manual card-menu
+  action, and the bulk action alike.
+- Card context menu gains "Open archived version" (the stored snapshot, or the
+  latest-snapshot lookup when none is stored; mark-read-on-open applies) and
+  "Save to Wayback Machine" (only shown while no snapshot is stored).
+- Bulk bar gains a "Wayback" button that archives the selection sequentially,
+  skipping already-captured or ignored bookmarks, with a summary notice.
+
 ## [1.4.0] - 2026-09-03
 
 ### Added
