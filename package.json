@@ -1,6 +1,6 @@
 {
   "name": "linkhaven",
-  "version": "1.5.1",
+  "version": "1.6.1",
   "description": "Linkwarden-style bookmark navigator for Obsidian: collection tree + cover-card grid over one note per bookmark.",
   "type": "module",
   "license": "MIT",
@@ -9,6 +9,7 @@
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "lint": "eslint .",
     "test:readable": "node scripts/test-readable.mjs",
+    "test:sort": "node scripts/test-sort.mjs",
     "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "dependencies": {

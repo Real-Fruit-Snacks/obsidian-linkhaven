@@ -239,6 +239,19 @@ export class CollectionTreeView extends ItemView {
 	private renderLists(): void {
 		const lists = this.listsEl;
 		if (!lists || !this.contentEl.isConnected) return;
+		// Capture the scroll position BEFORE rebuilding and restore it AFTER:
+		// the .lh-tree contentEl is the overflow-y: auto element, and store
+		// updates (e.g. during bulk drops) must not jump the tree to the top.
+		const scroller = this.contentEl;
+		const scrollTop = scroller.scrollTop;
+		try {
+			this.renderListsInto(lists);
+		} finally {
+			scroller.scrollTop = scrollTop;
+		}
+	}
+
+	private renderListsInto(lists: HTMLElement): void {
 		lists.empty();
 		const store = this.plugin.store;
 		const q = this.query.trim().toLowerCase();

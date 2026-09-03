@@ -398,6 +398,31 @@
 	height: 14px;
 }
 
+/* In-flight spinner shown in a card's meta row during a bulk run */
+.lh-spinning {
+	display: inline-flex;
+	align-items: center;
+	color: var(--text-muted);
+	animation: lh-spin 1s linear infinite;
+}
+
+.lh-spinning .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+@keyframes lh-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.lh-spinning {
+		animation: none;
+	}
+}
+
 .lh-card-domain {
 	overflow: hidden;
 	text-overflow: ellipsis;

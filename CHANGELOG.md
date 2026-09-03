@@ -4,6 +4,43 @@ All notable changes to Linkhaven are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.6.1] - 2026-09-03
+
+### Fixed
+- Grid and tree views no longer jump on store updates: the scroll position, the
+  expanded "Show more" card window, and the search input's focus and selection
+  are captured before each re-render and restored after, so bulk actions
+  (Wayback archive, refetch) no longer yank the view back to the top.
+- The grid toolbar's sort dropdown now re-syncs from settings on every render;
+  changing the sort in the settings tab previously left the toolbar dropdown
+  showing the stale value (sort dropdown audit; the sort pipeline itself was
+  verified correct and is now guarded by `scripts/test-sort.mjs`).
+
+## [1.6.0] - 2026-09-03
+
+### Added
+- "Open archived version" card button: bookmarks with a stored Wayback snapshot
+  get an archive-icon button in the card action row (directly after the
+  readable-copy button) that opens the snapshot in the browser; mark-read-on-open
+  applies, same as opening the link.
+- Configurable card buttons: a new "Card buttons" settings group offers a toggle
+  per card action (Open note, Open readable copy, Open archived version, Mark
+  read or unread, Pin, Edit tags, Move to collection, Delete). Hidden buttons
+  disappear from the card action row — which is omitted entirely when all are
+  off — while the card's context menu keeps every action as the escape hatch.
+  Changes re-render open grids immediately.
+
+## [1.5.2] - 2026-09-03
+
+### Added
+- Live progress for bulk Wayback and Refetch runs: the bulk bar's count label
+  becomes a live status ("Archiving 2/10 · example.com"), all action buttons
+  disable during the run, and a Cancel button replaces Clear — canceling
+  finishes the current item and skips the rest ("Canceled — N of M done").
+- Per-card in-flight spinner: a rotating loader icon appears in the card meta
+  row while its item is being processed in a bulk run and is removed on every
+  completion path; the animation respects prefers-reduced-motion.
+
 ## [1.5.1] - 2026-09-03
 
 ### Added

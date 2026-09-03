@@ -12,7 +12,14 @@ import {
 } from 'obsidian';
 import type LinkhavenPlugin from '../main';
 import { LongPressMenu, MenuAnchor } from '../longPressMenu';
-import { BookmarkRecord, GridSort, LH_BULK_MIME, VIEW_TYPE_GRID } from '../types';
+import {
+	BookmarkRecord,
+	CARD_BUTTON_IDS,
+	CardButtonId,
+	GridSort,
+	LH_BULK_MIME,
+	VIEW_TYPE_GRID,
+} from '../types';
 import {
 	AddBookmarkModal,
 	ConfirmModal,
@@ -41,6 +48,7 @@ export class BookmarkGridView extends ItemView {
 	private footerEl: HTMLElement | null = null;
 	private labelEl: HTMLElement | null = null;
 	private searchEl: HTMLInputElement | null = null;
+	private sortDropdown: DropdownComponent | null = null;
 	private toggleEl: HTMLElement | null = null;
 	private selectToggleEl: HTMLElement | null = null;
 	private bulkBarEl: HTMLElement | null = null;
@@ -56,8 +64,17 @@ export class BookmarkGridView extends ItemView {
 	private selectionAnchor: string | null = null;
 	/** Toolbar-toggled selection mode (tap-to-toggle, menus suspended). */
 	private selectionMode = false;
-	private bulkRefetching = false;
-	private bulkWaybacking = false;
+	/** Live state of a bulk Wayback/Refetch run; null when idle. */
+	private bulkRun: {
+		total: number;
+		done: number;
+		currentDomain: string;
+		cancelled: boolean;
+		kind: 'wayback' | 'refetch';
+	} | null = null;
+	/** Note path of the item currently in flight (drives the card spinner). */
+	private bulkCurrentPath: string | null = null;
+	private bulkCountEl: HTMLElement | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: LinkhavenPlugin) {
 		super(leaf);
@@ -99,6 +116,7 @@ export class BookmarkGridView extends ItemView {
 				await this.plugin.saveSettings();
 				this.renderAll(false);
 			});
+		this.sortDropdown = sortDropdown;
 		sortDropdown.selectEl.addClass('lh-toolbar-sort');
 		sortDropdown.selectEl.setAttribute('aria-label', 'Sort bookmarks');
 		this.searchEl = toolbar.createEl('input', {
@@ -216,6 +234,10 @@ export class BookmarkGridView extends ItemView {
 	private renderAll(resetCap: boolean): void {
 		if (!this.cardsEl || !this.contentEl.isConnected) return;
 		if (resetCap) this.shownCap = INITIAL_CAP;
+		// The toolbar persists across re-renders, so re-sync the sort dropdown
+		// from settings on every render: a sort changed in the settings tab
+		// (notifyViews) would otherwise leave it showing a stale value.
+		this.sortDropdown?.setValue(this.plugin.settings.gridSort);
 		// Re-renders preserve the selection; only paths whose notes are gone
 		// (e.g. after a bulk delete) are pruned.
 		const alive = new Set(this.plugin.store.all().map((r) => r.path));
@@ -226,7 +248,9 @@ export class BookmarkGridView extends ItemView {
 		this.renderLabel();
 		this.renderBulkBar();
 		const records = this.currentRecords();
-		this.renderCards(records);
+		// Explicit resets (filter change, view toggle) scroll to the top; store
+		// updates preserve the user's scroll/focus/show-more state.
+		this.renderCards(records, !resetCap);
 	}
 
 	private renderLabel(): void {
@@ -263,10 +287,34 @@ export class BookmarkGridView extends ItemView {
 		}
 	}
 
-	private renderCards(records: BookmarkRecord[]): void {
+	private renderCards(records: BookmarkRecord[], preserveView: boolean): void {
 		const cards = this.cardsEl;
 		if (!cards) return;
 		const token = ++this.renderToken;
+		// Capture UI state BEFORE rebuilding. The scrolling container is this
+		// view's contentEl (the .lh-gridview element is the overflow-y: auto
+		// element in styles.css), not cardsEl. Store-update re-renders (e.g.
+		// per item during a bulk archive) must be invisible to the user: no
+		// scroll movement, no collapsed show-more window, no lost search focus.
+		const scroller = this.contentEl;
+		const scrollTop = preserveView ? scroller.scrollTop : 0;
+		const visibleCount = this.shownCap;
+		const searchFocused = preserveView && document.activeElement === this.searchEl;
+		const selectionStart = this.searchEl?.selectionStart ?? null;
+		const selectionEnd = this.searchEl?.selectionEnd ?? null;
+		// Restore all three AFTER the rebuild completes (the cards render in
+		// chunks, so scroll can only be restored once the content height is back).
+		const restoreView = (): void => {
+			if (!preserveView || !this.contentEl.isConnected) return;
+			scroller.scrollTop = scrollTop;
+			this.shownCap = visibleCount;
+			if (searchFocused && this.searchEl) {
+				this.searchEl.focus();
+				if (selectionStart !== null && selectionEnd !== null) {
+					this.searchEl.setSelectionRange(selectionStart, selectionEnd);
+				}
+			}
+		};
 		cards.empty();
 		cards.toggleClass('lh-grid', this.viewMode === 'grid');
 		cards.toggleClass('lh-list', this.viewMode === 'list');
@@ -274,6 +322,7 @@ export class BookmarkGridView extends ItemView {
 		if (records.length === 0) {
 			this.renderEmpty(cards);
 			this.renderFooter(0, 0);
+			restoreView();
 			return;
 		}
 
@@ -290,6 +339,7 @@ export class BookmarkGridView extends ItemView {
 				window.requestAnimationFrame(step);
 			} else {
 				this.renderFooter(records.length, cap);
+				restoreView();
 			}
 		};
 		window.requestAnimationFrame(step);
@@ -405,6 +455,12 @@ export class BookmarkGridView extends ItemView {
 			setIcon(badge, 'archive');
 			setTooltip(badge, 'Archived to Wayback');
 		}
+		// Re-renders mid bulk run rebuild the card: re-apply the in-flight spinner.
+		if (record.path === this.bulkCurrentPath) {
+			const spin = meta.createSpan({ cls: 'lh-spinning' });
+			spin.setAttribute('aria-label', 'Processing');
+			setIcon(spin, 'loader-2');
+		}
 		meta.createSpan({ cls: 'lh-card-domain', text: domainFromUrl(record.url) });
 		if (record.created) meta.createSpan({ cls: 'lh-card-date', text: record.created });
 
@@ -415,28 +471,49 @@ export class BookmarkGridView extends ItemView {
 			}
 		}
 
-		const actions = body.createDiv({ cls: 'lh-card-actions' });
-		this.actionButton(actions, 'open-note', record.path, 'file-text', 'Open note');
-		if (record.readable) {
-			this.actionButton(actions, 'open-readable', record.path, 'book-open', 'Open readable copy');
+		// Card buttons are gated by settings.cardButtons (missing key = enabled);
+		// the context menu keeps every action regardless, as the escape hatch.
+		const buttonOn = (id: CardButtonId): boolean =>
+			this.plugin.settings.cardButtons[id] !== false;
+		if (CARD_BUTTON_IDS.some(buttonOn)) {
+			const actions = body.createDiv({ cls: 'lh-card-actions' });
+			if (buttonOn('open-note')) {
+				this.actionButton(actions, 'open-note', record.path, 'file-text', 'Open note');
+			}
+			if (record.readable && buttonOn('open-readable')) {
+				this.actionButton(actions, 'open-readable', record.path, 'book-open', 'Open readable copy');
+			}
+			if (record.wayback && buttonOn('open-wayback')) {
+				this.actionButton(actions, 'open-wayback', record.path, 'archive', 'Open archived version');
+			}
+			if (buttonOn('mark-read')) {
+				this.actionButton(
+					actions,
+					'toggle-read',
+					record.path,
+					record.status === 'read' ? 'mail' : 'check',
+					record.status === 'read' ? 'Mark as unread' : 'Mark as read'
+				);
+			}
+			if (buttonOn('pin')) {
+				this.actionButton(
+					actions,
+					'toggle-pin',
+					record.path,
+					record.pinned ? 'pin-off' : 'pin',
+					record.pinned ? 'Unpin' : 'Pin'
+				);
+			}
+			if (buttonOn('edit-tags')) {
+				this.actionButton(actions, 'edit-tags', record.path, 'tags', 'Edit tags');
+			}
+			if (buttonOn('move')) {
+				this.actionButton(actions, 'move', record.path, 'folder-input', 'Move to collection');
+			}
+			if (buttonOn('delete')) {
+				this.actionButton(actions, 'trash', record.path, 'trash-2', 'Move to trash');
+			}
 		}
-		this.actionButton(
-			actions,
-			'toggle-read',
-			record.path,
-			record.status === 'read' ? 'mail' : 'check',
-			record.status === 'read' ? 'Mark as unread' : 'Mark as read'
-		);
-		this.actionButton(
-			actions,
-			'toggle-pin',
-			record.path,
-			record.pinned ? 'pin-off' : 'pin',
-			record.pinned ? 'Unpin' : 'Pin'
-		);
-		this.actionButton(actions, 'edit-tags', record.path, 'tags', 'Edit tags');
-		this.actionButton(actions, 'move', record.path, 'folder-input', 'Move to collection');
-		this.actionButton(actions, 'trash', record.path, 'trash-2', 'Move to trash');
 		return card;
 	}
 
@@ -610,21 +687,33 @@ export class BookmarkGridView extends ItemView {
 		bar.toggleClass('lh-hidden', count === 0);
 		if (count === 0) return;
 
-		bar.createSpan({ cls: 'lh-bulk-count', text: `${count} selected` });
+		const running = this.bulkRun !== null;
+		this.bulkCountEl = bar.createSpan({ cls: 'lh-bulk-count' });
 
 		const selectAll = bar.createEl('button', { text: 'Select all' });
+		selectAll.disabled = running;
 		selectAll.onclick = () => {
 			for (const record of this.currentRecords()) this.selection.add(record.path);
 			this.applySelectionClasses();
 			this.renderBulkBar();
 		};
-		const clear = bar.createEl('button', { text: 'Clear' });
-		clear.onclick = () => this.clearSelection(true);
+		// During a run, Clear swaps out for Cancel; the selection stays intact.
+		if (running) {
+			const cancel = bar.createEl('button', { text: 'Cancel' });
+			cancel.onclick = () => {
+				if (this.bulkRun) this.bulkRun.cancelled = true;
+			};
+		} else {
+			const clear = bar.createEl('button', { text: 'Clear' });
+			clear.onclick = () => this.clearSelection(true);
+		}
 
 		const move = bar.createEl('button', { text: 'Move to…' });
+		move.disabled = running;
 		move.onclick = () => new MoveToModal(this.app, this.plugin, Array.from(this.selection)).open();
 
 		const tag = bar.createEl('button', { text: 'Add tag…' });
+		tag.disabled = running;
 		tag.onclick = () => {
 			const paths = Array.from(this.selection);
 			new TextInputModal(this.app, {
@@ -637,20 +726,34 @@ export class BookmarkGridView extends ItemView {
 		};
 
 		const refetch = bar.createEl('button', { text: 'Refetch' });
-		refetch.disabled = this.bulkRefetching;
-		refetch.onclick = () => void this.runBulkRefetch(refetch);
+		refetch.disabled = running;
+		refetch.onclick = () => void this.runBulk('refetch');
 
 		const wayback = bar.createEl('button', { text: 'Wayback' });
-		wayback.disabled = this.bulkWaybacking;
-		wayback.onclick = () => void this.runBulkWayback(wayback);
+		wayback.disabled = running;
+		wayback.onclick = () => void this.runBulk('wayback');
 
 		const markRead = bar.createEl('button', { text: 'Mark read' });
+		markRead.disabled = running;
 		markRead.onclick = () => void this.runBulkSetStatus('read');
 		const markUnread = bar.createEl('button', { text: 'Mark unread' });
+		markUnread.disabled = running;
 		markUnread.onclick = () => void this.runBulkSetStatus('unread');
 
 		const del = bar.createEl('button', { text: 'Delete', cls: 'mod-warning' });
+		del.disabled = running;
 		del.onclick = () => this.confirmBulkDelete();
+
+		this.renderBulkStatus();
+	}
+
+	/** Live bulk-run status: label shows progress while a run is active. */
+	private renderBulkStatus(): void {
+		if (!this.bulkCountEl) return;
+		const run = this.bulkRun;
+		this.bulkCountEl.textContent = run
+			? `${run.kind === 'wayback' ? 'Archiving' : 'Refetching'} ${run.done}/${run.total} · ${run.currentDomain}`
+			: `${this.selection.size} selected`;
 	}
 
 	private async runBulkAddTag(paths: string[], tag: string): Promise<void> {
@@ -664,64 +767,107 @@ export class BookmarkGridView extends ItemView {
 		);
 	}
 
-	private async runBulkRefetch(button: HTMLButtonElement): Promise<void> {
-		const paths = Array.from(this.selection);
-		if (paths.length === 0 || this.bulkRefetching) return;
-		this.bulkRefetching = true;
-		button.disabled = true;
-		try {
-			// Sequential on purpose: each refetch awaits the queue's throttle gap,
-			// so requests stay polite instead of fanning out in parallel.
-			let ok = 0;
-			for (const path of paths) {
-				const file = this.app.vault.getFileByPath(path);
-				if (!file) continue;
-				if (await this.plugin.enrichQueue.refetch(file)) ok++;
+	/**
+	 * Shared runner for the bulk Wayback and Refetch actions: one sequential
+	 * loop with live progress in the bulk bar, a per-card spinner, and cancel
+	 * (finishes the current item, skips the rest). Selection stays intact.
+	 */
+	private async runBulk(kind: 'wayback' | 'refetch'): Promise<void> {
+		if (this.bulkRun) return;
+		const records = Array.from(this.selection)
+			.map((path) => this.plugin.store.all().find((r) => r.path === path))
+			.filter((r): r is BookmarkRecord => !!r);
+		// Wayback skips bookmarks already captured or on an ignored domain.
+		const items = (kind === 'wayback'
+			? records.filter(
+					(r) =>
+						!r.wayback &&
+						!isIgnoredDomain(r.url, this.plugin.settings.waybackIgnoredDomains)
+				)
+			: records
+		).map((r) => ({ path: r.path, domain: domainFromUrl(r.url) || r.url }));
+		if (items.length === 0) {
+			if (kind === 'wayback') {
+				new Notice('Nothing to archive — already captured or ignored');
 			}
-			new Notice(
-				ok === paths.length ? `Refetched ${ok} bookmarks` : `Refetched ${ok} of ${paths.length} bookmarks`
-			);
+			return;
+		}
+		const first = items[0];
+		if (!first) return;
+		this.bulkRun = {
+			total: items.length,
+			done: 0,
+			currentDomain: first.domain,
+			cancelled: false,
+			kind,
+		};
+		this.renderBulkBar();
+		let ok = 0;
+		const run = this.bulkRun;
+		try {
+			// Sequential on purpose: each item awaits the queue's throttle gap,
+			// so requests stay polite instead of fanning out in parallel.
+			for (const item of items) {
+				// Cancel is checked between items: the current item finishes.
+				if (run.cancelled) break;
+				run.currentDomain = item.domain;
+				this.renderBulkStatus();
+				const file = this.app.vault.getFileByPath(item.path);
+				this.bulkCurrentPath = item.path;
+				this.setCardSpinning(item.path, true);
+				try {
+					if (file) {
+						if (kind === 'wayback') {
+							const result = await this.plugin.enrichQueue.archiveToWayback(file);
+							if (result.archivedUrl) ok++;
+						} else if (await this.plugin.enrichQueue.refetch(file)) {
+							ok++;
+						}
+					}
+				} finally {
+					// The spinner leaves on every completion path, success or fail.
+					this.bulkCurrentPath = null;
+					this.setCardSpinning(item.path, false);
+				}
+				run.done++;
+				this.renderBulkStatus();
+			}
 		} finally {
-			this.bulkRefetching = false;
-			button.disabled = false;
+			this.bulkRun = null;
+			this.renderBulkBar();
+		}
+		if (run.cancelled) {
+			new Notice(`Canceled — ${run.done} of ${run.total} done`);
+		} else if (kind === 'wayback') {
+			new Notice(
+				ok === run.total
+					? `Archived ${ok} bookmarks to Wayback`
+					: `Archived ${ok} of ${run.total} bookmarks to Wayback`
+			);
+		} else {
+			new Notice(
+				ok === run.total ? `Refetched ${ok} bookmarks` : `Refetched ${ok} of ${run.total} bookmarks`
+			);
 		}
 	}
 
-	private async runBulkWayback(button: HTMLButtonElement): Promise<void> {
-		if (this.bulkWaybacking) return;
-		// Skip bookmarks already captured or on an ignored domain.
-		const candidates = Array.from(this.selection)
-			.map((path) => this.plugin.store.all().find((r) => r.path === path))
-			.filter(
-				(r): r is BookmarkRecord =>
-					!!r &&
-					!r.wayback &&
-					!isIgnoredDomain(r.url, this.plugin.settings.waybackIgnoredDomains)
-			);
-		if (candidates.length === 0) {
-			new Notice('Nothing to archive — already captured or ignored');
-			return;
-		}
-		this.bulkWaybacking = true;
-		button.disabled = true;
-		try {
-			// Sequential on purpose: each capture awaits the queue's throttle gap,
-			// so requests stay polite instead of fanning out in parallel.
-			let ok = 0;
-			for (const record of candidates) {
-				const file = this.app.vault.getFileByPath(record.path);
-				if (!file) continue;
-				const result = await this.plugin.enrichQueue.archiveToWayback(file);
-				if (result.archivedUrl) ok++;
+	/** Add/remove the in-flight spinner in a card's meta row. */
+	private setCardSpinning(path: string, on: boolean): void {
+		const cards = this.cardsEl?.querySelectorAll<HTMLElement>('.lh-card');
+		if (!cards) return;
+		for (const card of Array.from(cards)) {
+			if (card.dataset['path'] !== path) continue;
+			const existing = card.querySelector('.lh-spinning');
+			if (on && !existing) {
+				const meta = card.querySelector<HTMLElement>('.lh-card-meta');
+				if (!meta) return;
+				const spin = meta.createSpan({ cls: 'lh-spinning' });
+				spin.setAttribute('aria-label', 'Processing');
+				setIcon(spin, 'loader-2');
+			} else if (!on && existing) {
+				existing.remove();
 			}
-			new Notice(
-				ok === candidates.length
-					? `Archived ${ok} bookmarks to Wayback`
-					: `Archived ${ok} of ${candidates.length} bookmarks to Wayback`
-			);
-		} finally {
-			this.bulkWaybacking = false;
-			button.disabled = false;
+			return;
 		}
 	}
 
@@ -874,6 +1020,15 @@ export class BookmarkGridView extends ItemView {
 				const readableFile = record?.readable ? this.app.vault.getFileByPath(record.readable) : null;
 				if (readableFile) {
 					await this.app.workspace.getLeaf('tab').openFile(readableFile);
+					await this.markReadOnOpen(path);
+				}
+				break;
+			}
+			case 'open-wayback': {
+				// Stored snapshot only — the button renders solely when wayback is set.
+				const record = this.plugin.store.all().find((r) => r.path === path);
+				if (record?.wayback) {
+					window.open(record.wayback, '_external');
 					await this.markReadOnOpen(path);
 				}
 				break;

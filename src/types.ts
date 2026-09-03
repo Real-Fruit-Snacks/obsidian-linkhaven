@@ -25,6 +25,28 @@ export interface BookmarkRecord {
 	wayback?: string;
 }
 
+/** Card action-row buttons that can be hidden via settings.cardButtons. */
+export type CardButtonId =
+	| 'open-note'
+	| 'open-readable'
+	| 'open-wayback'
+	| 'mark-read'
+	| 'pin'
+	| 'edit-tags'
+	| 'move'
+	| 'delete';
+
+export const CARD_BUTTON_IDS: CardButtonId[] = [
+	'open-note',
+	'open-readable',
+	'open-wayback',
+	'mark-read',
+	'pin',
+	'edit-tags',
+	'move',
+	'delete',
+];
+
 export const VIEW_TYPE_TREE = 'linkhaven-tree';
 export const VIEW_TYPE_GRID = 'linkhaven-grid';
 

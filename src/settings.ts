@@ -1,7 +1,8 @@
 import { App, Notice, PluginSettingTab, Setting, normalizePath } from 'obsidian';
 import type { SettingDefinitionItem, TextComponent } from 'obsidian';
 import type LinkhavenPlugin from './main';
-import type { Filter, GridSort } from './types';
+import type { CardButtonId, Filter, GridSort } from './types';
+import { CARD_BUTTON_IDS } from './types';
 
 const GRID_SORT_OPTIONS: Record<GridSort, string> = {
 	newest: 'Newest first',
@@ -22,6 +23,22 @@ const MOBILE_SAVE_DESC =
 	'Copy an obsidian:// link you can use from a share-sheet shortcut on your phone.';
 
 const WAYBACK_IGNORED_PLACEHOLDER = 'example.com\n*.internal.example.org';
+
+/** Card action-row buttons, in row order, with their settings-tab names. */
+const CARD_BUTTONS: { id: CardButtonId; name: string }[] = [
+	{ id: 'open-note', name: 'Open note' },
+	{ id: 'open-readable', name: 'Open readable copy' },
+	{ id: 'open-wayback', name: 'Open archived version' },
+	{ id: 'mark-read', name: 'Mark read or unread' },
+	{ id: 'pin', name: 'Pin' },
+	{ id: 'edit-tags', name: 'Edit tags' },
+	{ id: 'move', name: 'Move to collection' },
+	{ id: 'delete', name: 'Delete' },
+];
+// The context menu is the always-available escape hatch for hidden buttons.
+const CARD_BUTTONS_DESC =
+	"Choose which actions appear on bookmark cards. All actions stay available in the card's context menu.";
+const CARD_BUTTON_KEY_PREFIX = 'cardButtons.';
 
 /**
  * Split textarea input on newlines/commas and normalize each domain:
@@ -56,6 +73,9 @@ export interface LinkhavenSettings {
 	renameNotesToTitle: boolean;
 	gridSort: GridSort;
 	markReadOnOpen: boolean;
+	// cardButtons: which card action-row buttons render; a missing key means
+	// enabled, so buttons added in future versions default on.
+	cardButtons: Record<CardButtonId, boolean>;
 	autoWayback: boolean;
 	waybackIgnoredDomains: string[];
 	collapsedNodes: string[];
@@ -75,6 +95,16 @@ export const DEFAULT_SETTINGS: LinkhavenSettings = {
 	renameNotesToTitle: true,
 	gridSort: 'newest',
 	markReadOnOpen: false,
+	cardButtons: {
+		'open-note': true,
+		'open-readable': true,
+		'open-wayback': true,
+		'mark-read': true,
+		pin: true,
+		'edit-tags': true,
+		move: true,
+		delete: true,
+	},
 	autoWayback: false,
 	waybackIgnoredDomains: [],
 	collapsedNodes: [],
@@ -172,6 +202,20 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 				},
 			},
 			{
+				// Dot-notation keys address one entry of the cardButtons record;
+				// setControlValue/getControlValue below resolve the nesting.
+				type: 'group',
+				heading: 'Card buttons',
+				items: CARD_BUTTONS.map((button) => ({
+					name: button.name,
+					control: {
+						type: 'toggle' as const,
+						key: `${CARD_BUTTON_KEY_PREFIX}${button.id}`,
+						defaultValue: true,
+					},
+				})),
+			},
+			{
 				name: 'Archive saved links to the Wayback Machine',
 				desc: 'Submit each saved link to the Wayback Machine after enrichment. Captures are public and visible to anyone.',
 				control: {
@@ -199,10 +243,32 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 		];
 	}
 
+	// Resolves the dot-notation cardButtons.<id> keys; other keys mirror the
+	// documented default ("reads from this.plugin.settings") — super is never
+	// called so this stays lint-clean on minAppVersion 1.7.2.
+	override getControlValue(key: string): unknown {
+		if (key.startsWith(CARD_BUTTON_KEY_PREFIX)) {
+			const id = key.slice(CARD_BUTTON_KEY_PREFIX.length) as CardButtonId;
+			// Missing key = enabled, matching buildCard's gating.
+			return this.plugin.settings.cardButtons[id] !== false;
+		}
+		return (this.plugin.settings as unknown as Record<string, unknown>)[key];
+	}
+
 	// Mirrors the onChange handlers in display(): normalize folders, fall back
 	// to defaults, persist, and rescan when the bookmarks folder moves.
 	override async setControlValue(key: string, value: unknown): Promise<void> {
 		const s = this.plugin.settings;
+		if (key.startsWith(CARD_BUTTON_KEY_PREFIX)) {
+			const id = key.slice(CARD_BUTTON_KEY_PREFIX.length) as CardButtonId;
+			if ((CARD_BUTTON_IDS as string[]).includes(id)) {
+				s.cardButtons[id] = value === true;
+				await this.plugin.saveSettings();
+				// Hidden/shown buttons only take effect on a grid re-render.
+				this.plugin.notifyViews();
+			}
+			return;
+		}
 		switch (key) {
 			case 'bookmarksFolder':
 				s.bookmarksFolder = normalizePath(String(value).trim()) || DEFAULT_SETTINGS.bookmarksFolder;
@@ -340,6 +406,20 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 					await this.setControlValue('markReadOnOpen', value);
 				})
 			);
+
+		new Setting(containerEl)
+			.setName('Card buttons')
+			.setDesc(CARD_BUTTONS_DESC)
+			.setHeading();
+		for (const button of CARD_BUTTONS) {
+			new Setting(containerEl).setName(button.name).addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.cardButtons[button.id] !== false)
+					.onChange(async (value) => {
+						await this.setControlValue(`${CARD_BUTTON_KEY_PREFIX}${button.id}`, value);
+					})
+			);
+		}
 
 		new Setting(containerEl)
 			.setName('Archive saved links to the Wayback Machine')

@@ -41,7 +41,8 @@ or Node APIs, so nothing is "desktop only".
 - **Bulk select + actions** — Ctrl/Cmd-click and Shift-click (or the selection-mode
   toggle on mobile) select multiple cards; a bulk bar offers Move to…, Add tag…,
   Mark read/unread and Delete, and dragging a selected card drops the whole
-  selection onto a collection, Inbox, or tag.
+  selection onto a collection, Inbox, or tag. Bulk Refetch/Wayback runs show
+  live progress in the bar (with a per-card spinner) and can be canceled.
 - **Linkwarden import** — collections, tags, dates and pinned links map across; existing
   URLs are skipped.
 - **Cascade delete** — deleting a bookmark also removes its cover, favicon, and archive
@@ -54,8 +55,13 @@ or Node APIs, so nothing is "desktop only".
   can archive a whole selection. Snapshots are stored in the note's `wayback:`
   frontmatter; an ignored-domains list keeps private URLs out of the archive.
   Captures are anonymous — authenticated captures may come later if rate limits bite.
-  Archived bookmarks show an archive badge on their card and collect under the
-  **Archived** smart view.
+  Archived bookmarks show an archive badge on their card, collect under the
+  **Archived** smart view, and get an **Open archived version** card button that
+  opens the stored snapshot.
+- **Configurable card buttons** — the **Card buttons** settings group toggles each
+  card action button (Open note, Open readable copy, Open archived version, Mark
+  read or unread, Pin, Edit tags, Move to collection, Delete); the card's context
+  menu always keeps every action.
 - **Local-first** — plain Markdown files, no account, no telemetry.
 
 ## Install
@@ -172,6 +178,7 @@ artifacts stay behind.
 | Rename notes to page title | on | Rename domain-named notes to the fetched page title after enrichment |
 | Grid sort | Newest first | Order of bookmarks in the grid: newest, oldest, title, or domain |
 | Mark as read on open | off | Silently mark a bookmark as read when its link or readable copy is opened |
+| Card buttons | all on | Choose which action buttons appear on bookmark cards; all actions stay available in the card's context menu |
 | Archive saved links to the Wayback Machine | off | Submit each saved link to the Wayback Machine after enrichment; captures are public |
 | Wayback ignored domains | — | Domains (subdomains included) that are never archived; one per line or comma-separated |
 | Mobile save link | — | Copy an `obsidian://` save link for share-sheet shortcuts on your phone |
