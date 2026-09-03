@@ -387,6 +387,17 @@
 	height: 14px;
 }
 
+.lh-wayback-badge {
+	display: inline-flex;
+	align-items: center;
+	color: var(--text-faint);
+}
+
+.lh-wayback-badge .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
 .lh-card-domain {
 	overflow: hidden;
 	text-overflow: ellipsis;

@@ -19,7 +19,7 @@ or Node APIs, so nothing is "desktop only".
 ## Features
 
 - **Collection tree** with nested collections (`Dev/Tools`), live filter, and smart
-  views: All, Inbox, Pinned, Unread, Recent.
+  views: All, Inbox, Pinned, Unread, Recent, Archived.
 - **Cover-card grid** with `og:image` covers, favicon and letter-tile fallbacks,
   grid/list toggle, "+ add / tree" toolbar buttons, a **sort dropdown** (newest,
   oldest, title, or domain — applied after filtering and search), live **fuzzy
@@ -54,6 +54,8 @@ or Node APIs, so nothing is "desktop only".
   can archive a whole selection. Snapshots are stored in the note's `wayback:`
   frontmatter; an ignored-domains list keeps private URLs out of the archive.
   Captures are anonymous — authenticated captures may come later if rate limits bite.
+  Archived bookmarks show an archive badge on their card and collect under the
+  **Archived** smart view.
 - **Local-first** — plain Markdown files, no account, no telemetry.
 
 ## Install

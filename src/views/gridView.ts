@@ -8,6 +8,7 @@ import {
 	WorkspaceLeaf,
 	debounce,
 	setIcon,
+	setTooltip,
 } from 'obsidian';
 import type LinkhavenPlugin from '../main';
 import { LongPressMenu, MenuAnchor } from '../longPressMenu';
@@ -348,6 +349,8 @@ export class BookmarkGridView extends ItemView {
 						return 'Nothing unread';
 					case 'recent':
 						return 'Nothing recent';
+					case 'archived':
+						return 'Nothing archived yet';
 				}
 		}
 	}
@@ -395,6 +398,12 @@ export class BookmarkGridView extends ItemView {
 			const pin = meta.createSpan({ cls: 'lh-pin' });
 			pin.setAttribute('aria-label', 'Pinned');
 			setIcon(pin, 'pin');
+		}
+		if (record.wayback) {
+			const badge = meta.createSpan({ cls: 'lh-wayback-badge' });
+			badge.setAttribute('aria-label', 'Archived to Wayback');
+			setIcon(badge, 'archive');
+			setTooltip(badge, 'Archived to Wayback');
 		}
 		meta.createSpan({ cls: 'lh-card-domain', text: domainFromUrl(record.url) });
 		if (record.created) meta.createSpan({ cls: 'lh-card-date', text: record.created });

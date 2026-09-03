@@ -4,6 +4,16 @@ All notable changes to Linkhaven are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.1] - 2026-09-03
+
+### Added
+- Archived badge on cards: bookmarks with a stored Wayback snapshot now show a
+  muted archive icon in the card meta row (grid and list modes) with an
+  "Archived to Wayback" tooltip.
+- Archived smart view: the tree's Views section gains an Archived row that
+  collects every bookmark with a Wayback snapshot; the grid shows a
+  "Nothing archived yet" empty state when none are archived.
+
 ## [1.5.0] - 2026-09-03
 
 ### Added

@@ -283,6 +283,8 @@ export class BookmarkStore extends Component {
 						return r.status === 'unread';
 					case 'recent':
 						return this.recentPaths().has(r.path);
+					case 'archived':
+						return !!r.wayback;
 				}
 		}
 	}

@@ -28,6 +28,7 @@ const SMART_ROWS: { id: SmartId; label: string; icon: string }[] = [
 	{ id: 'pinned', label: 'Pinned', icon: 'pin' },
 	{ id: 'unread', label: 'Unread', icon: 'mail' },
 	{ id: 'recent', label: 'Recent', icon: 'clock' },
+	{ id: 'archived', label: 'Archived', icon: 'archive' },
 ];
 
 export class CollectionTreeView extends ItemView {

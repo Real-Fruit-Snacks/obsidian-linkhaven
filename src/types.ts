@@ -1,4 +1,4 @@
-export type SmartId = 'inbox' | 'pinned' | 'unread' | 'recent';
+export type SmartId = 'inbox' | 'pinned' | 'unread' | 'recent' | 'archived';
 
 /** Grid record ordering, applied after filter + search. */
 export type GridSort = 'newest' | 'oldest' | 'title' | 'domain';
