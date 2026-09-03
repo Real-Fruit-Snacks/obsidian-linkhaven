@@ -4,6 +4,19 @@ All notable changes to Linkhaven are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-09-03
+
+### Added
+- Grid sort control: a toolbar dropdown (Newest first, Oldest first, Title, Domain)
+  orders the grid after filtering and search, persisted as the new Grid sort setting
+  and applied uniformly to every filter, smart views included.
+- Mark as read on open setting: opening a bookmark's external link or readable copy
+  silently marks it as read (opening the note never does).
+- Copy link in the card context menu: copies the bookmark URL to the clipboard with
+  a confirmation notice.
+- Fuzzy search in the grid toolbar: Obsidian's fuzzy matcher now gates inclusion
+  across title, URL, tags, description, and collection.
+
 ## [1.3.0] - 2026-09-03
 
 ### Changed

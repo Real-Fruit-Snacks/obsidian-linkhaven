@@ -197,7 +197,7 @@ export default class LinkhavenPlugin extends Plugin {
 		}
 	}
 
-	private notifyViews(): void {
+	notifyViews(): void {
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_TREE)) {
 			if (leaf.view instanceof CollectionTreeView) leaf.view.refresh();
 		}

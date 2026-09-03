@@ -164,6 +164,11 @@
 	color: var(--text-faint);
 }
 
+.lh-toolbar-sort {
+	flex: 0 0 auto;
+	max-width: 140px;
+}
+
 .lh-toolbar-search {
 	flex: 1 1 160px;
 	min-width: 120px;

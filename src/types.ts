@@ -1,5 +1,8 @@
 export type SmartId = 'inbox' | 'pinned' | 'unread' | 'recent';
 
+/** Grid record ordering, applied after filter + search. */
+export type GridSort = 'newest' | 'oldest' | 'title' | 'domain';
+
 export type Filter =
 	| { kind: 'all' }
 	| { kind: 'collection'; path: string }

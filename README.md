@@ -21,10 +21,13 @@ or Node APIs, so nothing is "desktop only".
 - **Collection tree** with nested collections (`Dev/Tools`), live filter, and smart
   views: All, Inbox, Pinned, Unread, Recent.
 - **Cover-card grid** with `og:image` covers, favicon and letter-tile fallbacks,
-  grid/list toggle, "+ add / tree" toolbar buttons, live search, per-card
+  grid/list toggle, "+ add / tree" toolbar buttons, a **sort dropdown** (newest,
+  oldest, title, or domain — applied after filtering and search), live **fuzzy
+  search** across title, URL, tags, description, and collection, per-card
   actions (open, read/unread, pin, move to collection, trash), and a right-click
-  or long-press **context menu** on every card. With zero bookmarks, the grid
-  shows an **"Add your first bookmark"** button to get you started.
+  or long-press **context menu** on every card with **Copy link** one tap away.
+  With zero bookmarks, the grid shows an **"Add your first bookmark"** button to
+  get you started.
 - **Automatic enrichment** — saves are zero-prompt; title, description, cover and
   favicon are fetched in the background at a polite rate, with retry on failure
   (the `Retry failed enrichments` command re-queues them manually).
@@ -159,6 +162,8 @@ artifacts stay behind.
 | Capture readable copy | off | Save a readable Markdown copy during enrichment |
 | Show save chooser | off | Collection/tag pickers in the add modal |
 | Rename notes to page title | on | Rename domain-named notes to the fetched page title after enrichment |
+| Grid sort | Newest first | Order of bookmarks in the grid: newest, oldest, title, or domain |
+| Mark as read on open | off | Silently mark a bookmark as read when its link or readable copy is opened |
 | Mobile save link | — | Copy an `obsidian://` save link for share-sheet shortcuts on your phone |
 
 Tree collapse state and the last grid filter are persisted automatically.

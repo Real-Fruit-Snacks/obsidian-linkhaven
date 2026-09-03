@@ -1,4 +1,4 @@
-import { App, Component, TAbstractFile, TFile, debounce, normalizePath } from 'obsidian';
+import { App, Component, TAbstractFile, TFile, debounce, normalizePath, prepareFuzzySearch } from 'obsidian';
 import type { BookmarkRecord, Filter } from './types';
 import { canonicalizeUrl } from './utils';
 
@@ -254,13 +254,13 @@ export class BookmarkStore extends Component {
 
 	matches(r: BookmarkRecord, f: Filter, query?: string): boolean {
 		if (!this.matchesFilter(r, f)) return false;
-		const q = query?.trim().toLowerCase();
+		const q = query?.trim();
 		if (!q) return true;
-		const haystack = [r.title, r.url, r.description ?? '', ...r.tags].join('\n').toLowerCase();
-		return q
-			.split(/\s+/)
-			.filter((word) => word.length > 0)
-			.every((word) => haystack.includes(word));
+		// Fuzzy gates inclusion only; the grid's sort control governs order.
+		const matcher = prepareFuzzySearch(q);
+		if (!matcher) return false;
+		const text = `${r.title} ${r.url} ${r.tags.join(' ')} ${r.description ?? ''} ${r.collection}`;
+		return matcher(text) !== null;
 	}
 
 	private matchesFilter(r: BookmarkRecord, f: Filter): boolean {

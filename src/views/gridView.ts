@@ -1,7 +1,17 @@
-import { Debouncer, ItemView, Menu, Notice, Platform, WorkspaceLeaf, debounce, setIcon } from 'obsidian';
+import {
+	Debouncer,
+	DropdownComponent,
+	ItemView,
+	Menu,
+	Notice,
+	Platform,
+	WorkspaceLeaf,
+	debounce,
+	setIcon,
+} from 'obsidian';
 import type LinkhavenPlugin from '../main';
 import { LongPressMenu, MenuAnchor } from '../longPressMenu';
-import { BookmarkRecord, LH_BULK_MIME, VIEW_TYPE_GRID } from '../types';
+import { BookmarkRecord, GridSort, LH_BULK_MIME, VIEW_TYPE_GRID } from '../types';
 import {
 	AddBookmarkModal,
 	ConfirmModal,
@@ -17,7 +27,7 @@ import {
 	deleteBookmarkCascade,
 	setStatusForPath,
 } from '../ops';
-import { domainFromUrl } from '../utils';
+import { domainFromUrl, sortRecords } from '../utils';
 
 const CHUNK_SIZE = 60;
 const INITIAL_CAP = 300;
@@ -71,6 +81,23 @@ export class BookmarkGridView extends ItemView {
 
 		const toolbar = contentEl.createDiv({ cls: 'lh-toolbar' });
 		this.labelEl = toolbar.createDiv({ cls: 'lh-toolbar-label' });
+		// Sort dropdown before the search input: persists the setting and
+		// re-renders; ordering is applied after filter + search in the pipeline.
+		const sortDropdown = new DropdownComponent(toolbar)
+			.addOptions({
+				newest: 'Newest first',
+				oldest: 'Oldest first',
+				title: 'Title',
+				domain: 'Domain',
+			})
+			.setValue(this.plugin.settings.gridSort)
+			.onChange(async (value) => {
+				this.plugin.settings.gridSort = value as GridSort;
+				await this.plugin.saveSettings();
+				this.renderAll(false);
+			});
+		sortDropdown.selectEl.addClass('lh-toolbar-sort');
+		sortDropdown.selectEl.setAttribute('aria-label', 'Sort bookmarks');
 		this.searchEl = toolbar.createEl('input', {
 			cls: 'lh-toolbar-search',
 			attr: { type: 'text', placeholder: 'Search bookmarks' },
@@ -176,7 +203,11 @@ export class BookmarkGridView extends ItemView {
 
 	private currentRecords(): BookmarkRecord[] {
 		const filter = this.plugin.filter;
-		return this.plugin.store.filter(filter).filter((r) => this.plugin.store.matches(r, filter, this.query));
+		const records = this.plugin.store
+			.filter(filter)
+			.filter((r) => this.plugin.store.matches(r, filter, this.query));
+		// Sort last: it governs display order for every filter incl. smart views.
+		return sortRecords(records, this.plugin.settings.gridSort);
 	}
 
 	private renderAll(resetCap: boolean): void {
@@ -441,7 +472,37 @@ export class BookmarkGridView extends ItemView {
 		// Plain click: behaves as today (open the link) and becomes the anchor.
 		this.selectionAnchor = path;
 		const record = this.plugin.store.all().find((r) => r.path === path);
-		if (record) window.open(record.url, '_external');
+		if (record) this.openExternalLink(record);
+	}
+
+	/** Open the external link; mark-read-on-open applies (never to Open note). */
+	private openExternalLink(record: BookmarkRecord): void {
+		window.open(record.url, '_external');
+		void this.markReadOnOpen(record.path);
+	}
+
+	/**
+	 * markReadOnOpen setting: opening the link or the readable copy silently
+	 * sets status='read' when the bookmark is currently unread. No Notice.
+	 */
+	private async markReadOnOpen(path: string): Promise<void> {
+		if (!this.plugin.settings.markReadOnOpen) return;
+		const record = this.plugin.store.all().find((r) => r.path === path);
+		if (!record || record.status !== 'unread') return;
+		try {
+			await setStatusForPath(this.app, path, 'read');
+		} catch {
+			// Silent by design: a failed status write must not interrupt opening.
+		}
+	}
+
+	private async copyLink(url: string): Promise<void> {
+		try {
+			await navigator.clipboard.writeText(url);
+			new Notice('Link copied');
+		} catch {
+			new Notice('Copy failed');
+		}
 	}
 
 	/** Toggle one card in/out of the selection and make it the range anchor. */
@@ -647,7 +708,13 @@ export class BookmarkGridView extends ItemView {
 			item
 				.setTitle('Open link')
 				.setIcon('external-link')
-				.onClick(() => window.open(record.url, '_external'))
+				.onClick(() => this.openExternalLink(record))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Copy link')
+				.setIcon('copy')
+				.onClick(() => void this.copyLink(record.url))
 		);
 		menu.addItem((item) =>
 			item
@@ -719,7 +786,10 @@ export class BookmarkGridView extends ItemView {
 			case 'open-readable': {
 				const record = this.plugin.store.all().find((r) => r.path === path);
 				const readableFile = record?.readable ? this.app.vault.getFileByPath(record.readable) : null;
-				if (readableFile) await this.app.workspace.getLeaf('tab').openFile(readableFile);
+				if (readableFile) {
+					await this.app.workspace.getLeaf('tab').openFile(readableFile);
+					await this.markReadOnOpen(path);
+				}
 				break;
 			}
 			case 'refetch':

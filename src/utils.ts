@@ -1,4 +1,5 @@
 import { App, TFolder, normalizePath } from 'obsidian';
+import type { BookmarkRecord, GridSort } from './types';
 
 /** Strip characters that are invalid in Obsidian file names. No lookbehind (iOS safe). */
 export function sanitizeFileName(name: string): string {
@@ -50,6 +51,42 @@ export function domainFromUrl(url: string): string {
 	} catch {
 		return '';
 	}
+}
+
+/**
+ * Order grid records per the gridSort setting. Applied after filter + search,
+ * uniformly for every filter (smart 'recent' stays the latest 30, then sorted).
+ */
+export function sortRecords(records: BookmarkRecord[], sort: GridSort): BookmarkRecord[] {
+	const byPath = (a: BookmarkRecord, b: BookmarkRecord): number => a.path.localeCompare(b.path);
+	// Case-insensitive; bookmarks without a title always sink to the end.
+	const byTitle = (a: BookmarkRecord, b: BookmarkRecord): number => {
+		const ta = a.title.toLowerCase();
+		const tb = b.title.toLowerCase();
+		if (!ta && !tb) return 0;
+		if (!ta) return 1;
+		if (!tb) return -1;
+		return ta.localeCompare(tb);
+	};
+	const out = [...records];
+	switch (sort) {
+		case 'newest':
+			out.sort((a, b) => b.created.localeCompare(a.created) || byPath(a, b));
+			break;
+		case 'oldest':
+			out.sort((a, b) => a.created.localeCompare(b.created) || byPath(a, b));
+			break;
+		case 'title':
+			out.sort((a, b) => byTitle(a, b) || byPath(a, b));
+			break;
+		case 'domain':
+			out.sort(
+				(a, b) =>
+					domainFromUrl(a.url).localeCompare(domainFromUrl(b.url)) || byTitle(a, b) || byPath(a, b)
+			);
+			break;
+	}
+	return out;
 }
 
 /** Create folder (and parents) if missing. No-op when it already exists. */

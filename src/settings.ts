@@ -1,7 +1,19 @@
 import { App, Notice, PluginSettingTab, Setting, normalizePath } from 'obsidian';
 import type { SettingDefinitionItem, TextComponent } from 'obsidian';
 import type LinkhavenPlugin from './main';
-import type { Filter } from './types';
+import type { Filter, GridSort } from './types';
+
+const GRID_SORT_OPTIONS: Record<GridSort, string> = {
+	newest: 'Newest first',
+	oldest: 'Oldest first',
+	title: 'Title',
+	domain: 'Domain',
+};
+
+function asGridSort(value: unknown): GridSort {
+	const candidate = String(value);
+	return candidate in GRID_SORT_OPTIONS ? (candidate as GridSort) : DEFAULT_SETTINGS.gridSort;
+}
 
 /** Placeholder in the mobile save link that the shortcut replaces with the shared URL. */
 const MOBILE_SAVE_PLACEHOLDER = 'PASTE_OR_SHORTCUT_INPUT';
@@ -18,6 +30,8 @@ export interface LinkhavenSettings {
 	captureReadable: boolean;
 	showSaveChooser: boolean;
 	renameNotesToTitle: boolean;
+	gridSort: GridSort;
+	markReadOnOpen: boolean;
 	collapsedNodes: string[];
 	lastFilter: Filter | null;
 	knownCollections: string[];
@@ -33,6 +47,8 @@ export const DEFAULT_SETTINGS: LinkhavenSettings = {
 	captureReadable: false,
 	showSaveChooser: false,
 	renameNotesToTitle: true,
+	gridSort: 'newest',
+	markReadOnOpen: false,
 	collapsedNodes: [],
 	lastFilter: null,
 	knownCollections: [],
@@ -109,6 +125,25 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 				},
 			},
 			{
+				name: 'Grid sort',
+				desc: 'Order of bookmarks in the grid, applied after filtering and search.',
+				control: {
+					type: 'dropdown',
+					key: 'gridSort',
+					options: GRID_SORT_OPTIONS,
+					defaultValue: DEFAULT_SETTINGS.gridSort,
+				},
+			},
+			{
+				name: 'Mark as read on open',
+				desc: 'Silently mark a bookmark as read when its link or readable copy is opened.',
+				control: {
+					type: 'toggle',
+					key: 'markReadOnOpen',
+					defaultValue: DEFAULT_SETTINGS.markReadOnOpen,
+				},
+			},
+			{
 				name: 'Mobile save link',
 				desc: MOBILE_SAVE_DESC,
 				action: () => void this.copyMobileSaveLink(),
@@ -144,6 +179,15 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 				return;
 			case 'renameNotesToTitle':
 				s.renameNotesToTitle = value === true;
+				await this.plugin.saveSettings();
+				return;
+			case 'gridSort':
+				s.gridSort = asGridSort(value);
+				await this.plugin.saveSettings();
+				this.plugin.notifyViews();
+				return;
+			case 'markReadOnOpen':
+				s.markReadOnOpen = value === true;
 				await this.plugin.saveSettings();
 				return;
 		}
@@ -215,6 +259,27 @@ export class LinkhavenSettingTab extends PluginSettingTab {
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.renameNotesToTitle).onChange(async (value) => {
 					await this.setControlValue('renameNotesToTitle', value);
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Grid sort')
+			.setDesc('Order of bookmarks in the grid, applied after filtering and search.')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions(GRID_SORT_OPTIONS)
+					.setValue(this.plugin.settings.gridSort)
+					.onChange(async (value) => {
+						await this.setControlValue('gridSort', value);
+					})
+			);
+
+		new Setting(containerEl)
+			.setName('Mark as read on open')
+			.setDesc('Silently mark a bookmark as read when its link or readable copy is opened.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.markReadOnOpen).onChange(async (value) => {
+					await this.setControlValue('markReadOnOpen', value);
 				})
 			);
 
